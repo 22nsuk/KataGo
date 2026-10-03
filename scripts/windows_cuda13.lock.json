@@ -1,0 +1,167 @@
+{
+  "cudaRelease": "13.2.2",
+  "msvcToolset": "14.44",
+  "target": "windows-nvidia-cuda13",
+  "sourceLibraries": [
+    {
+      "name": "zlib",
+      "version": "1.3.1",
+      "url": "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz",
+      "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+      "cmake": [
+        "-DZLIB_BUILD_EXAMPLES=OFF"
+      ],
+      "linkage": "static",
+      "msvcRuntime": "MultiThreaded"
+    },
+    {
+      "name": "libzip",
+      "version": "1.11.4",
+      "url": "https://libzip.org/download/libzip-1.11.4.tar.xz",
+      "sha256": "8a247f57d1e3e6f6d11413b12a6f28a9d388de110adc0ec608d893180ed7097b",
+      "cmake": [
+        "-DENABLE_GNUTLS=OFF",
+        "-DENABLE_MBEDTLS=OFF",
+        "-DENABLE_OPENSSL=OFF",
+        "-DENABLE_BZIP2=OFF",
+        "-DENABLE_LZMA=OFF",
+        "-DENABLE_ZSTD=OFF",
+        "-DBUILD_REGRESS=OFF",
+        "-DBUILD_EXAMPLES=OFF",
+        "-DBUILD_TOOLS=OFF",
+        "-DBUILD_DOC=OFF"
+      ],
+      "linkage": "static",
+      "msvcRuntime": "MultiThreaded"
+    }
+  ],
+  "cudnnVersion": "9.24.0.43",
+  "provider": "cuda",
+  "gpuArchitectures": [
+    75,
+    80,
+    86,
+    87,
+    88,
+    89,
+    90,
+    100,
+    110,
+    103,
+    120,
+    121
+  ],
+  "schemaVersion": 1,
+  "dependencies": [
+    {
+      "sha256": "3e9b024c9a3199689721b4a02bf7337aaea7bedc5ddd42a08ed34d9c81fe1e3e",
+      "sizeBytes": 31078504,
+      "version": "13.2.86",
+      "name": "cuda_nvcc",
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-13.2.86-archive.zip",
+      "destination": "cuda"
+    },
+    {
+      "sha256": "f8d75fba1f3b597ae625283fe3a03928f09223be75941a69c497e2b412b752be",
+      "sizeBytes": 3519613,
+      "version": "13.2.86",
+      "name": "cuda_cccl",
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-13.2.86-archive.zip",
+      "destination": "cuda"
+    },
+    {
+      "sha256": "a8d61bacb23bbc7131b9ccff0876abec3edb68f3b767bfb0377e5571892e9c19",
+      "sizeBytes": 139368,
+      "version": "13.2.86",
+      "name": "cuda_crt",
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-13.2.86-archive.zip",
+      "destination": "cuda"
+    },
+    {
+      "sha256": "293de78978866080e7d8b43d316a27c45a51eda1ffccd1bd01b6b624d5f88779",
+      "sizeBytes": 55237784,
+      "version": "13.2.86",
+      "name": "libnvvm",
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/windows-x86_64/libnvvm-windows-x86_64-13.2.86-archive.zip",
+      "destination": "cuda"
+    },
+    {
+      "sha256": "024e0c1055343d9d2a7d35c90fb7695db14cc2f05bb962198eb18b92c73b32be",
+      "sizeBytes": 3094421,
+      "version": "13.2.86",
+      "name": "cuda_cudart",
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.2.86-archive.zip",
+      "destination": "cuda"
+    },
+    {
+      "sha256": "c8d4254c51bfa3fa982bd40bf36de9800d4c65211945e8393fbf4c310ef9232a",
+      "sizeBytes": 288218786,
+      "version": "13.2.86",
+      "name": "cuda_nvrtc",
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-13.2.86-archive.zip",
+      "destination": "cuda"
+    },
+    {
+      "sha256": "bc6f590490134f4dbe29672b72e536c44362cc5f738a0f7e48c8c3c141e9b24a",
+      "sizeBytes": 388113288,
+      "version": "13.4.1.3",
+      "name": "libcublas",
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-13.4.1.3-archive.zip",
+      "destination": "cuda"
+    },
+    {
+      "sha256": "e1e94fbb5bf45c3c148a34febb29ca5546c760ebfe8ceb6ecc949b0a4d836bd9",
+      "sizeBytes": 271896788,
+      "version": "13.2.86",
+      "name": "libnvjitlink",
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvjitlink/windows-x86_64/libnvjitlink-windows-x86_64-13.2.86-archive.zip",
+      "destination": "cuda"
+    },
+    {
+      "sha256": "88f72bd1ce384197cedbc68496c6052d7ff0bd9fd0b3c74470402cf737507e06",
+      "sizeBytes": 1274017601,
+      "version": "9.24.0.43",
+      "name": "cudnn",
+      "url": "https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.24.0.43_cuda13-archive.zip",
+      "destination": "cudnn"
+    },
+    {
+      "name": "baseline-runtime",
+      "version": "v1.18.1",
+      "destination": "runtime",
+      "url": "https://github.com/lightvector/KataGo/releases/download/v1.18.1/katago-v1.18.1-cuda12.8-cudnn9.8.0-windows-x64.zip",
+      "sizeBytes": 10135501,
+      "sha256": "8caabc5675950f52d285a686c19727f7a56a982313a7f055ade060ba78df552e"
+    }
+  ],
+  "manifestUrl": "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.2.2.json",
+  "runtimeFiles": [
+    "cudart64_13.dll",
+    "cublas64_13.dll",
+    "cublasLt64_13.dll",
+    "nvblas64_13.dll",
+    "nvrtc64_130_0.dll",
+    "nvrtc-builtins64_132.dll",
+    "nvJitLink_130_0.dll",
+    "cudnn_adv64_9.dll",
+    "cudnn_cnn64_9.dll",
+    "cudnn_engines_precompiled64_9.dll",
+    "cudnn_engines_runtime_compiled64_9.dll",
+    "cudnn_engines_tensor_ir64_9.dll",
+    "cudnn_ext64_9.dll",
+    "cudnn_graph64_9.dll",
+    "cudnn_heuristic64_9.dll",
+    "cudnn_ops64_9.dll",
+    "cudnn64_9.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "msvcp140_atomic_wait.dll",
+    "msvcp140_codecvt_ids.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "vcruntime140_threads.dll"
+  ],
+  "runtimeProfile": "cuda13.2-cudnn9.24",
+  "nvccVersion": "13.2.86"
+}

@@ -1,5 +1,9 @@
 # Windows CUDA 13 build profile
 
+For automated hash-locked CUDA 12.8 and 13.2 release builds, use the
+[Windows CUDA source bundle workflow](KG_WINDOWS_CUDA_BUNDLES.md). The manual
+recipe below remains useful for a locally installed toolkit and a selected GPU.
+
 Build this engine revision directly with its CMake project. Root reuse does not
 need a GUI-owned source patch. The CUDA backend uses cuBLAS, cuDNN, and NVRTC; the
 optional CUTLASS fused FFN path is disabled automatically under MSVC.
