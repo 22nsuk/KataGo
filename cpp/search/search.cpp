@@ -75,7 +75,7 @@ Search::Search(const SearchParams& params, NNEvaluator* nnEval, NNEvaluator* hum
    rootHistory(),
    rootGraphHash(),
    rootHintLoc(Board::NULL_LOC),
-   avoidMoveUntilByLocBlack(),avoidMoveUntilByLocWhite(),rootRestrictionReuseActive(false),avoidMoveUntilRescaleRoot(false),
+   avoidMoveUntilByLocBlack(),avoidMoveUntilByLocWhite(),rootRestrictionReuseActive(false),rootVisitCapStartVisits(0),avoidMoveUntilRescaleRoot(false),
    rootFocus(nullptr),rootFocusCleanupMutex(),rootFocusToCleanUp(),
    rootSymmetries(),
    rootPruneOnlySymmetries(),
@@ -272,13 +272,13 @@ void Search::setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vec
   if(!reuseRootTree || !rootOnly(bVec) || !rootOnly(wVec) ||
      !rootOnly(avoidMoveUntilByLocBlack) || !rootOnly(avoidMoveUntilByLocWhite))
     clearSearch();
-  else {
+  else if(rootNode != NULL) {
     rootRestrictionReuseActive = true;
-    // Root visit-cap snapshots describe a fixed move distribution. The new mask changes
-    // that distribution, so rebuild only this snapshot from the retained allowed children.
+    // Give the changed support a fresh cap's worth of normal selection before freezing
+    // its distribution. Retained children must not immediately freeze out unallocated moves.
+    rootVisitCapStartVisits = getRootVisits();
     // Like all setters here, this runs after the caller has stopped the search.
-    if(rootNode != NULL)
-      delete rootNode->visitCapSnapshot.exchange(NULL, std::memory_order_acq_rel);
+    delete rootNode->visitCapSnapshot.exchange(NULL, std::memory_order_acq_rel);
   }
   avoidMoveUntilByLocBlack = bVec;
   avoidMoveUntilByLocWhite = wVec;
@@ -403,6 +403,7 @@ void Search::setNNEval(NNEvaluator* nnEval) {
 
 void Search::clearSearch() {
   rootRestrictionReuseActive = false;
+  rootVisitCapStartVisits = 0;
   effectiveSearchTimeCarriedOver = 0.0;
   if(rootNode != NULL) {
     deleteAllTableNodesMulithreaded();
@@ -501,6 +502,7 @@ bool Search::makeMove(Loc moveLoc, Player movePla, bool preventEncore) {
 
   //Explicitly clear avoid move arrays and focus moves when we play a move - user needs to respecify them if they want them.
   rootRestrictionReuseActive = false;
+  rootVisitCapStartVisits = 0;
   avoidMoveUntilByLocBlack.clear();
   avoidMoveUntilByLocWhite.clear();
   setRootFocus(std::vector<Loc>(), std::vector<double>(), 0.0);
@@ -921,6 +923,9 @@ void Search::beginSearch(bool pondering) {
 
         //Set the visits in place
         while(node.statsLock.test_and_set(std::memory_order_acquire));
+        int64_t oldNumVisits = node.stats.visits.load(std::memory_order_acquire);
+        if(newNumVisits < oldNumVisits)
+          rootVisitCapStartVisits = std::max((int64_t)0, rootVisitCapStartVisits - (oldNumVisits - newNumVisits));
         node.stats.visits.store(newNumVisits,std::memory_order_release);
         node.statsLock.clear(std::memory_order_release);
 

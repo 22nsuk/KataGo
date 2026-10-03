@@ -26,6 +26,106 @@ static void runRootReuseInvariantTests(const string& modelFile, Logger& logger) 
   Board board(9,9);
   {
     SearchParams params;
+    params.maxVisits = 80;
+    params.rootSymmetryPruning = true;
+    Search search(params,nnEval,&logger,"root-reuse-fresh-symmetry");
+    BoardHistory hist(board,P_BLACK,Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+    search.setPosition(P_BLACK,board,hist);
+    vector<int> mask(Board::MAX_ARR_SIZE,0);
+    mask[Board::PASS_LOC] = 1;
+    search.setAvoidMoveUntilByLoc(mask,{},true);
+    search.runWholeSearch(P_BLACK);
+    // No prior tree needed preserving, and avoiding pass does not break board symmetry.
+    testAssert(search.rootSymmetries.size() == 8);
+    int representatives = 0;
+    for(int y = 0; y<9; y++)
+      for(int x = 0; x<9; x++)
+        representatives += !search.rootSymDupLoc[Location::getLoc(x,y,board.x_size)];
+    testAssert(representatives == 15);
+    SearchNode* retainedRoot = search.rootNode;
+    auto children = retainedRoot->getChildren();
+    SearchNode* retainedChild = children[0].getIfAllocated();
+    Loc retainedMove = children[0].getMoveLoc();
+    int64_t retainedEdgeVisits = children[0].getEdgeVisits();
+    mask[retainedMove] = 1;
+    search.setAvoidMoveUntilByLoc(mask,{},true);
+    search.beginSearch(false);
+    testAssert(search.rootNode == retainedRoot);
+    testAssert(!search.rootSymmetryPruningEnabled());
+    testAssert(children[0].getIfAllocated() == retainedChild);
+    testAssert(children[0].getEdgeVisits() == retainedEdgeVisits);
+    search.setAvoidMoveUntilByLoc({}, {}, true);
+    search.beginSearch(false);
+    testAssert(children[0].getIfAllocated() == retainedChild);
+    testAssert(children[0].getEdgeVisits() == retainedEdgeVisits);
+    search.clearSearch();
+    search.setAvoidMoveUntilByLoc(mask,{},true);
+    search.beginSearch(false);
+    testAssert(search.rootSymmetryPruningEnabled());
+  }
+  for(Player pla: {P_BLACK,P_WHITE}) {
+    SearchParams params;
+    params.maxVisits = 64;
+    params.visitCapContempt = 32;
+    params.visitCapContemptPla = pla;
+    params.valueWeightExponent = 0.0;
+    Search search(params,nnEval,&logger,"root-reuse-new-cap-support");
+    BoardHistory hist(board,pla,Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+    search.setPosition(pla,board,hist);
+    Loc oldMove = Location::ofString("D4",board);
+    Loc newMove = Location::ofString("F6",board);
+    vector<int> mask(Board::MAX_ARR_SIZE,1);
+    mask[oldMove] = 0;
+    auto setMask = [&]() {
+      search.setAvoidMoveUntilByLoc(pla == P_BLACK ? mask : vector<int>(),
+                                   pla == P_WHITE ? mask : vector<int>(),true);
+    };
+    setMask();
+    search.runWholeSearch(pla);
+    SearchNode* retainedRoot = search.rootNode;
+    SearchNode* retainedChild = retainedRoot->getChildren()[0].getIfAllocated();
+    testAssert(retainedRoot->getChildren()[0].getMoveLoc() == oldMove);
+    testAssert(retainedRoot->visitCapSnapshot.load() != NULL);
+    int64_t retainedVisits = search.getRootVisits();
+    mask[newMove] = 0;
+    setMask();
+    // maxVisits still includes retained visits. A mask change does not grant new search budget.
+    search.runWholeSearch(pla);
+    testAssert(search.getRootVisits() == retainedVisits);
+    testAssert(search.rootNode == retainedRoot);
+    testAssert(retainedRoot->getChildren()[0].getIfAllocated() == retainedChild);
+    testAssert(retainedRoot->visitCapSnapshot.load() == NULL);
+    // A high-policy new move must be eligible during the new cap interval. Controlled
+    // policy removes dependence on the random NN-less evaluator's move preferences.
+    float* policy = retainedRoot->getNNOutput()->getPolicyProbsMaybeNoised();
+    policy[search.getPos(oldMove)] = 0.01f;
+    policy[search.getPos(newMove)] = 0.99f;
+    for(int i = 0; i<32; i++) {
+      if(i == 16)
+        setMask(); // Repeating the same restriction must not restart the cap interval.
+      SearchThread thread(0,search);
+      testAssert(search.runSinglePlayout(thread,1e30));
+      if(i < 31)
+        testAssert(retainedRoot->visitCapSnapshot.load() == NULL);
+    }
+    const VisitCapSnapshot* snapshot = retainedRoot->visitCapSnapshot.load();
+    testAssert(snapshot != NULL);
+    testAssert(snapshot->getWeightFrac(search.getPos(newMove)) > 0.0);
+    testAssert(search.getRootVisits() == retainedVisits + 32);
+    testAssert(retainedRoot->getChildren()[0].getIfAllocated() == retainedChild);
+    // maxPlayouts provides a fresh per-request budget when maxVisits is not restrictive.
+    params.maxVisits = ((int64_t)1) << 50;
+    params.maxPlayouts = 16;
+    search.setParamsNoClearing(params);
+    search.runWholeSearch(pla);
+    testAssert(search.getRootVisits() == retainedVisits + 48);
+    testAssert(retainedRoot->visitCapSnapshot.load() == snapshot);
+    testAssert(search.makeMove(oldMove,pla));
+    testAssert(search.rootVisitCapStartVisits == 0);
+    testAssert(!search.rootRestrictionReuseActive);
+  }
+  {
+    SearchParams params;
     params.maxVisits = 200;
     params.useGraphSearch = false;
     params.useUncertainty = false;

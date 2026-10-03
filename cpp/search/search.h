@@ -103,6 +103,9 @@ struct Search {
   // KG-next: a root-only filter may mask existing children instead of discarding them.
   // Kept until the position changes so clearing the filter also restores symmetric children.
   bool rootRestrictionReuseActive;
+  // Root visits retained before the latest mask transition. Only new counted visits
+  // consume the root's visit-cap warmup; lifetime visits still count toward maxVisits.
+  int64_t rootVisitCapStartVisits;
   bool isReuseExcludedRootMove(Loc loc) const;
   bool rootSymmetryPruningEnabled() const;
   bool avoidMoveUntilRescaleRoot; // When avoiding moves at the root, rescale the root policy to sum to 1.

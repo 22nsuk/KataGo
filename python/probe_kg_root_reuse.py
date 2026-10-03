@@ -170,7 +170,7 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
     with tempfile.TemporaryDirectory(prefix='kg-root-reuse-') as directory:
         config = Path(directory) / 'gtp.cfg'
         config.write_text(
-            f'rules = chinese\nnumSearchThreads = {threads}\nmaxVisits = 1000000\n'
+            f'rules = chinese\nnumSearchThreads = {threads}\nmaxVisits = 64\n'
             'maxTime = 1000000000\nrootSymmetryPruning = true\n'
             'logToStderr = true\nlogAllGTPCommunication = false\nlogSearchInfo = false\n'
             'reportAnalysisWinratesAs = BLACK\nanalysisPVLen = 8\n'
@@ -183,6 +183,20 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
             assert probe.command('kg-reuse-root-tree').strip() == 'root-only-v1'
             version = probe.command('version')
             probe.command('boardsize 9')
+            # A first restricted analysis has no tree to preserve. Avoiding pass leaves
+            # board symmetries intact, so analysis must still report symmetric copies.
+            fresh_restricted = probe.search('avoid b pass 1 avoid w pass 1', 300, forbidden={'pass'})
+            assert any('isSymmetryOf' in detail for detail in fresh_restricted['moveDetails'].values()), fresh_restricted
+            results.append(fresh_restricted)
+            probe.command('clear_cache')
+            single = probe.search('allow b D4 1 allow w D4 1', 300, allowed={'D4'})
+            mixed = probe.search('allow b D4,F6 1 allow w D4,F6 1',
+                                 single['visits'] + 250, single['visits'], allowed={'D4', 'F6'})
+            # A retained allowed child must not freeze a newly allowed child out of a cap.
+            assert mixed['moveDetails']['D4']['edgeVisits'] >= single['moveDetails']['D4']['edgeVisits']
+            assert mixed['moveDetails']['F6']['edgeVisits'] > 0, mixed
+            results.extend([single, mixed])
+            probe.command('clear_cache')
             base = probe.search('', 1500)
             results.append(base)
             searched_moves = {move: visits for move, visits in base['moves'].items()
@@ -240,6 +254,21 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
             fresh = probe.search('', 50)
             assert fresh['firstVisits'] < shallow['visits']
             results.append(fresh)
+            # Continuous kata-analyze above ignores configured move limits. Bounded
+            # kata-search_analyze retains maxVisits' lifetime-counting semantics.
+            probe.command('clear_cache')
+            bounded = []
+            for move in ['D4', 'F6']:
+                probe.last = None
+                probe.command(f'kata-search_analyze {player} interval 1 rootInfo true pvEdgeVisits true '
+                              + ('ownership true movesOwnership true ' if ownership else '')
+                              + f'minmoves 30 reuseRootTree true allow b {move} 1 allow w {move} 1')
+                assert probe.last is not None
+                bounded.append({**probe.last, 'restriction': f'bounded allow {move}'})
+            assert bounded[0]['visits'] >= 64, bounded
+            assert bounded[1]['visits'] == bounded[0]['visits'], bounded
+            assert bounded[1]['moves'].get('F6', 0) == 0, bounded
+            results.extend(bounded)
             (output / 'result.json').write_text(json.dumps(
                 {'status': 'PASS', 'version': version, 'model': model.name, 'player': player,
                  'threads': threads, 'ownership': ownership, 'rootVisitCap': root_visit_cap, 'cases': results},
