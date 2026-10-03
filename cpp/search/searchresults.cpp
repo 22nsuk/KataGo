@@ -76,6 +76,7 @@ bool Search::getPlaySelectionValues(
   const NNOutput* nnOutput = node.getNNOutput();
   const float* policyProbs = nnOutput != NULL ? nnOutput->getPolicyProbsMaybeNoised() : NULL;
 
+  auto masked = [&](Loc loc) { return &node == rootNode && isReuseExcludedRootMove(loc); };
   double totalChildWeight = 0.0;
   const bool suppressPass = shouldSuppressPass(&node);
 
@@ -93,13 +94,14 @@ bool Search::getPlaySelectionValues(
     double childWeight = child->stats.getChildWeight(edgeVisits);
 
     locs.push_back(moveLoc);
-    totalChildWeight += childWeight;
+    if(!masked(moveLoc))
+      totalChildWeight += childWeight;
 
     // If the move appears to be outright illegal in policy probs, zero out the selection value.
     // Also if we're suppressing passes.
     // We always push a value on to playSelectionValues even if that value is 0,
     // because some callers rely on this to line up with the raw indices in the children array of the node.
-    if((suppressPass && moveLoc == Board::PASS_LOC) || policyProbs[getPos(moveLoc)] < 0) {
+    if(masked(moveLoc) || (suppressPass && moveLoc == Board::PASS_LOC) || policyProbs[getPos(moveLoc)] < 0) {
       playSelectionValues.push_back(0.0);
       if(retVisitCounts != NULL)
         (*retVisitCounts).push_back(0.0);
@@ -112,6 +114,15 @@ bool Search::getPlaySelectionValues(
   }
 
   int numChildren = (int)playSelectionValues.size();
+  if(numChildren > 0 && std::all_of(locs.begin(), locs.end(), masked)) {
+    locs.clear();
+    playSelectionValues.clear();
+    if(retVisitCounts != NULL)
+      retVisitCounts->clear();
+    if(!allowDirectPolicyMoves)
+      return false;
+    numChildren = 0; // Fall back to legal, unmasked policy moves, not a forbidden cached child.
+  }
 
   //Find the best child before LCB for pruning. Intended to be the most stably explored child.
   //This is the most weighted child, except with a tiny adjustment so that
@@ -126,6 +137,8 @@ bool Search::getPlaySelectionValues(
       double edgeVisits = childPointer.getEdgeVisits();
       Loc moveLoc = childPointer.getMoveLocRelaxed();
       double policyProb = policyProbs[getPos(moveLoc)];
+      if(masked(moveLoc))
+        continue;
 
       //Small weight on raw policy, and discount one visit's worth of weight since the most recent
       //visit could be overweighted.
@@ -176,7 +189,7 @@ bool Search::getPlaySelectionValues(
       const SearchChildPointer& childPointer = children[i];
       const SearchNode* child = childPointer.getIfAllocated();
       Loc moveLoc = childPointer.getMoveLocRelaxed();
-      if(suppressPass && moveLoc == Board::PASS_LOC) {
+      if(masked(moveLoc) || (suppressPass && moveLoc == Board::PASS_LOC)) {
         playSelectionValues[i] = 0;
         continue;
       }
@@ -292,6 +305,8 @@ bool Search::getPlaySelectionValues(
 
   double maxValue = 0.0;
   for(int i = 0; i<numChildren; i++) {
+    if(masked(locs[i]))
+      playSelectionValues[i] = 0.0;
     if(playSelectionValues[i] > maxValue)
       maxValue = playSelectionValues[i];
   }
@@ -300,7 +315,7 @@ bool Search::getPlaySelectionValues(
     //If we reached this point we have nonzero many children but the children are all weightless.
     //In that case, at least set each one to be weighted by its policy.
     for(int i = 0; i<numChildren; i++) {
-      playSelectionValues[i] = std::max(0.0,(double)policyProbs[getPos(locs[i])]);
+      playSelectionValues[i] = masked(locs[i]) ? 0.0 : std::max(0.0,(double)policyProbs[getPos(locs[i])]);
     }
     //Recompute max
     for(int i = 0; i<numChildren; i++) {
@@ -364,6 +379,8 @@ bool Search::getPlaySelectionValues(
         if(child == NULL)
           break;
         Loc moveLoc = childPointer.getMoveLocRelaxed();
+        if(masked(moveLoc))
+          continue;
         double humanProb = humanProbs[getPos(moveLoc)];
         if((suppressPass && moveLoc == Board::PASS_LOC) || humanProb < 0)
           humanProb = 0.0;
@@ -379,7 +396,7 @@ bool Search::getPlaySelectionValues(
       for(Loc loc: locs) {
         if(!contains(shiftedPolicy,loc)) {
           double humanProb = humanProbs[getPos(loc)];
-          if((suppressPass && loc == Board::PASS_LOC) || humanProb < 0)
+          if(masked(loc) || (suppressPass && loc == Board::PASS_LOC) || humanProb < 0)
             humanProb = 0.0;
           shiftedPolicy[loc] = humanProb;
           selfUtilities[loc] = selfUtilityAvg;
@@ -431,6 +448,8 @@ bool Search::getPlaySelectionValues(
 
   maxValue = 0.0;
   for(int i = 0; i<numChildren; i++) {
+    if(masked(locs[i]))
+      playSelectionValues[i] = 0.0;
     if(playSelectionValues[i] > maxValue)
       maxValue = playSelectionValues[i];
   }
@@ -984,6 +1003,7 @@ void Search::getAnalysisData(
   const SearchNode& node, vector<AnalysisData>& buf, int minMovesToTryToGet, bool includeWeightFactors, int maxPVDepth, bool duplicateForSymmetries
 ) const {
   buf.clear();
+  auto masked = [&](Loc loc) { return &node == rootNode && isReuseExcludedRootMove(loc); };
   vector<const SearchNode*> children;
   vector<int64_t> childrenEdgeVisits;
   vector<Loc> childrenMoveLocs;
@@ -1044,6 +1064,8 @@ void Search::getAnalysisData(
   double policyProbMassVisited = 0.0;
   {
     for(int i = 0; i<numChildren; i++) {
+      if(masked(childrenMoveLocs[i]))
+        continue;
       policyProbMassVisited += std::max(0.0, (double)policyProbs[getPos(childrenMoveLocs[i])]);
     }
     //Probability mass should not sum to more than 1, giving a generous allowance
@@ -1082,6 +1104,8 @@ void Search::getAnalysisData(
     const SearchNode* child = children[i];
     int64_t edgeVisits = childrenEdgeVisits[i];
     Loc moveLoc = childrenMoveLocs[i];
+    if(masked(moveLoc))
+      continue;
     double policyProb = policyProbs[getPos(moveLoc)];
     AnalysisData data = getAnalysisDataOfSingleChild(
       child, edgeVisits, scratchLocs, scratchValues, moveLoc, policyProb, fpuValue, parentUtility, parentWinLossValue,
@@ -1095,7 +1119,7 @@ void Search::getAnalysisData(
     buf.push_back(data);
 
     if(includeWeightFactors) {
-      MoreNodeStats& stats = statsBuf[i];
+      MoreNodeStats& stats = statsBuf[buf.size()-1];
       stats.stats = NodeStats(child->stats);
       stats.selfUtility = node.nextPla == P_WHITE ? data.utility : -data.utility;
       stats.weightAdjusted = stats.stats.getChildWeight(edgeVisits);
@@ -1105,34 +1129,39 @@ void Search::getAnalysisData(
 
   //Find all children and compute weighting of the children based on their values
   if(includeWeightFactors) {
+    int numReportedChildren = (int)buf.size();
     double totalChildWeight = 0.0;
-    for(int i = 0; i<numChildren; i++) {
+    for(int i = 0; i<numReportedChildren; i++) {
       totalChildWeight += statsBuf[i].weightAdjusted;
     }
     if(searchParams.useNoisePruning) {
       double policyProbsBuf[NNPos::MAX_NN_POLICY_SIZE];
-      for(int i = 0; i<numChildren; i++)
+      for(int i = 0; i<numReportedChildren; i++)
         policyProbsBuf[i] = std::max(1e-30, (double)policyProbs[getPos(statsBuf[i].prevMoveLoc)]);
-      totalChildWeight = pruneNoiseWeight(statsBuf, numChildren, totalChildWeight, policyProbsBuf);
+      totalChildWeight = pruneNoiseWeight(statsBuf, numReportedChildren, totalChildWeight, policyProbsBuf);
     }
     double amountToSubtract = 0.0;
     double amountToPrune = 0.0;
     downweightBadChildrenAndNormalizeWeight(
-      numChildren, totalChildWeight, totalChildWeight,
+      numReportedChildren, totalChildWeight, totalChildWeight,
       amountToSubtract, amountToPrune, statsBuf
     );
-    for(int i = 0; i<numChildren; i++)
+    for(int i = 0; i<numReportedChildren; i++)
       buf[i].weightFactor = statsBuf[i].weightAdjusted;
   }
 
   //Fill the rest of the moves directly from policy
-  if(numChildren < minMovesToTryToGet) {
+  int numMovesToAdd = minMovesToTryToGet - (int)buf.size();
+  if(numMovesToAdd > 0) {
     //A bit inefficient, but no big deal
-    for(int i = 0; i<minMovesToTryToGet - numChildren; i++) {
+    for(int i = 0; i<numMovesToAdd; i++) {
       int bestPos = -1;
       double bestPolicy = -1.0;
       for(int pos = 0; pos<NNPos::MAX_NN_POLICY_SIZE; pos++) {
         if(policyProbs[pos] < bestPolicy)
+          continue;
+        Loc moveLoc = NNPos::posToLoc(pos,rootBoard.x_size,rootBoard.y_size,nnXLen,nnYLen);
+        if(masked(moveLoc))
           continue;
 
         bool alreadyUsed = false;
@@ -1161,7 +1190,7 @@ void Search::getAnalysisData(
   }
   std::stable_sort(buf.begin(),buf.end());
 
-  if(duplicateForSymmetries && searchParams.rootSymmetryPruning && rootSymmetries.size() > 1) {
+  if(duplicateForSymmetries && rootSymmetryPruningEnabled() && rootSymmetries.size() > 1) {
     vector<AnalysisData> newBuf;
     std::set<Loc> isDone;
     for(int i = 0; i<buf.size(); i++) {
@@ -1859,13 +1888,13 @@ bool Search::traverseTreeForOwnership(
   if(childrenCapacity <= SearchChildrenSizes::SIZE0TOTAL) {
     double childWeightBuf[SearchChildrenSizes::SIZE0TOTAL];
     selfProp = traverseTreeForOwnershipChildren(
-      minProp, pruneProp, desiredProp, parentNNWeight, children, childWeightBuf, childrenCapacity, graphPath, accumulate
+      minProp, pruneProp, desiredProp, parentNNWeight, node == rootNode, children, childWeightBuf, childrenCapacity, graphPath, accumulate
     );
   }
   else {
     vector<double> childWeightBuf(childrenCapacity);
     selfProp = traverseTreeForOwnershipChildren(
-      minProp, pruneProp, desiredProp, parentNNWeight, children, &childWeightBuf[0], childrenCapacity, graphPath, accumulate
+      minProp, pruneProp, desiredProp, parentNNWeight, node == rootNode, children, &childWeightBuf[0], childrenCapacity, graphPath, accumulate
     );
   }
 
@@ -1885,6 +1914,7 @@ double Search::traverseTreeForOwnershipChildren(
   double pruneProp,
   double desiredProp,
   double parentNNWeight,
+  bool isRoot,
   ConstSearchNodeChildrenReference children,
   double* childWeightBuf,
   int childrenCapacity,
@@ -1899,7 +1929,7 @@ double Search::traverseTreeForOwnershipChildren(
       break;
     int64_t edgeVisits = childPointer.getEdgeVisits();
     double childWeight = child->stats.getChildWeight(edgeVisits);
-    childWeightBuf[i] = childWeight;
+    childWeightBuf[i] = isRoot && isReuseExcludedRootMove(childPointer.getMoveLocRelaxed()) ? 0.0 : childWeight;
     numChildren += 1;
   }
 

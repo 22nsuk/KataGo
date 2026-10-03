@@ -181,6 +181,8 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int numV
     MoreNodeStats& stats = statsBuf[numGoodChildren];
 
     Loc moveLoc = childPointer.getMoveLocRelaxed();
+    if(isRoot && isReuseExcludedRootMove(moveLoc))
+      continue;
     int64_t edgeVisits = childPointer.getEdgeVisits();
     stats.stats = NodeStats(child->stats);
 

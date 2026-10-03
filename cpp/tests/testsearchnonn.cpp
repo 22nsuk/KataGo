@@ -10,6 +10,7 @@
 #include "../search/asyncbot.h"
 #include "../search/evalcache.h"
 #include "../search/searchnode.h"
+#include "../search/searchnodetable.h"
 #include "../program/playutils.h"
 #include "../program/setup.h"
 #include "../tests/testsearchcommon.h"
@@ -17,6 +18,123 @@
 using namespace std;
 using namespace TestCommon;
 using namespace TestSearchCommon;
+
+//Exercise selection through public search APIs with controlled retained statistics. These
+//fixtures cover masks in the visit-cap and territory-pass paths independently of a real net.
+static void runRootReuseInvariantTests(const string& modelFile, Logger& logger) {
+  NNEvaluator* nnEval = startNNEval(modelFile,logger,"root-reuse-invariants",9,9,0,true,false,false,true,false);
+  Board board(9,9);
+  {
+    SearchParams params;
+    params.maxVisits = 200;
+    params.useGraphSearch = false;
+    params.useUncertainty = false;
+    params.useNoisePruning = false;
+    params.valueWeightExponent = 0.0;
+    params.visitCapContempt = 32;
+    params.visitCapContemptPla = P_BLACK;
+    Search search(params,nnEval,&logger,"root-reuse-cap-distribution");
+    BoardHistory hist(board,P_BLACK,Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+    search.setPosition(P_BLACK,board,hist);
+    search.runWholeSearch(P_BLACK);
+    SearchNodeChildrenReference children = search.rootNode->getChildren();
+    vector<int> indices;
+    for(int i = 0; i<children.getCapacity() && children[i].getIfAllocated() != NULL; i++) {
+      if(children[i].getMoveLoc() != Board::PASS_LOC)
+        indices.push_back(i);
+    }
+    testAssert(indices.size() >= 3);
+    int a = indices[0], b = indices[1], c = indices[2];
+    SearchNode* hidden = children[a].getIfAllocated();
+    hidden->stats.visits.store(10000);
+    hidden->stats.weightSum.store(10000.0);
+    hidden->stats.weightSqSum.store(10000.0);
+    children[a].setEdgeVisits(10000);
+    vector<int> mask(Board::MAX_ARR_SIZE,1);
+    mask[children[b].getMoveLoc()] = 0;
+    mask[children[c].getMoveLoc()] = 0;
+    int64_t retainedVisits = search.getRootVisits();
+    search.setAvoidMoveUntilByLoc(mask,{},true);
+    //Changing the support discards the frozen root distribution, retaining every child.
+    testAssert(search.rootNode->visitCapSnapshot.load() == NULL);
+    search.beginSearch(false);
+    testAssert(search.getRootVisits() == retainedVisits);
+    testAssert(children[a].getEdgeVisits() == 10000);
+    VisitCapSnapshot* snapshot = new VisitCapSnapshot();
+    snapshot->entries.push_back({search.getPos(children[b].getMoveLoc()),0.9});
+    snapshot->entries.push_back({search.getPos(children[c].getMoveLoc()),0.1});
+    snapshot->finalize();
+    delete search.rootNode->visitCapSnapshot.exchange(snapshot);
+    //A hidden 10000-visit child must not cause B to monopolize deficits in this 9:1 cap.
+    for(int i = 0; i<1000; i++) {
+      SearchThread thread(0,search);
+      testAssert(search.runSinglePlayout(thread,1e30));
+    }
+    double bWeight = children[b].getIfAllocated()->stats.getChildWeight(children[b].getEdgeVisits());
+    double cWeight = children[c].getIfAllocated()->stats.getChildWeight(children[c].getEdgeVisits());
+    testAssert(std::fabs(bWeight / (bWeight + cWeight) - 0.9) < 0.003);
+    testAssert(children[a].getEdgeVisits() == 10000);
+    search.setAvoidMoveUntilByLoc({}, {}, true);
+    search.beginSearch(false);
+    testAssert(children[a].getEdgeVisits() == 10000);
+    testAssert(search.rootNode->stats.weightSum.load() >= 10000.0);
+  }
+  {
+    SearchParams params;
+    params.maxVisits = 1;
+    params.useGraphSearch = false;
+    params.useUncertainty = false;
+    params.valueWeightExponent = 0.0;
+    params.fillDameBeforePass = true;
+    params.rootEndingBonusPoints = 0.0;
+    Search search(params,nnEval,&logger,"root-reuse-territory-pass");
+    BoardHistory hist(board,P_BLACK,Rules::parseRules("japanese"),0,BoardHistoryModes(false,false));
+    search.setPosition(P_BLACK,board,hist);
+    search.setAlwaysIncludeOwnerMap(true);
+    search.runWholeSearch(P_BLACK);
+    NNOutput* rootNN = search.rootNode->getNNOutput();
+    testAssert(rootNN != NULL && rootNN->whiteOwnerMap != NULL);
+    std::fill(rootNN->whiteOwnerMap,rootNN->whiteOwnerMap + 81,0.0f);
+    SearchNodeChildrenReference children = search.rootNode->getChildren();
+    Loc moves[3] = {Location::ofString("D4",board),Location::ofString("F6",board),Board::PASS_LOC};
+    //The well-visited safe D4 justifies dame filling. F6 loses, so after excluding D4,
+    //passing should be chosen. Synthetic leaf values make this rule independent of net noise.
+    for(int i = 0; i<3; i++) {
+      Hash128 key(0x524F4F5452455553ULL,(uint64_t)i+1);
+      SearchNode* child = new SearchNode(P_WHITE,false,0,key);
+      search.nodeTable->entries[search.nodeTable->getIndex(key.hash0)].insert({key,child});
+      int64_t visits = i == 1 ? 100 : 1000;
+      double utility = i == 1 ? 1.0 : 0.0;
+      double score = i == 1 ? 10.0 : 0.0;
+      child->stats.visits.store(visits);
+      child->stats.weightSum.store((double)visits);
+      child->stats.weightSqSum.store((double)visits);
+      child->stats.utilityAvg.store(utility);
+      child->stats.utilitySqAvg.store(utility * utility);
+      child->stats.winLossValueAvg.store(utility);
+      child->stats.scoreMeanAvg.store(score);
+      child->stats.scoreMeanSqAvg.store(score * score);
+      child->stats.leadAvg.store(score);
+      children[i].store(child);
+      children[i].setMoveLoc(moves[i]);
+      children[i].setEdgeVisits(visits);
+      rootNN->policyProbs[search.getPos(moves[i])] = 0.1f;
+    }
+    search.rootNode->stats.visits.store(2101);
+    search.rootNode->stats.weightSum.store(2101.0);
+    testAssert(search.getChosenMoveLoc() != Board::PASS_LOC);
+    vector<int> mask(Board::MAX_ARR_SIZE,0);
+    mask[moves[0]] = 1;
+    search.setAvoidMoveUntilByLoc(mask,{},true);
+    search.beginSearch(false);
+    testAssert(search.getChosenMoveLoc() == Board::PASS_LOC);
+    vector<AnalysisData> analysis;
+    search.getAnalysisData(analysis,30,true,2,false);
+    for(const AnalysisData& data: analysis)
+      testAssert(data.move != moves[0]);
+  }
+  delete nnEval;
+}
 
 
 void Tests::runNNLessSearchTests() {
@@ -31,6 +149,7 @@ void Tests::runNNLessSearchTests() {
   const bool logTime = false;
   Logger logger(nullptr, logToStdout, logToStderr, logTime);
   logger.addOStream(cout);
+  runRootReuseInvariantTests(modelFile,logger);
 
   {
     cout << "===================================================================" << endl;

@@ -45,7 +45,7 @@ class AsyncBot {
   void setPlayerIfNew(Player pla);
   void setKomiIfNew(float newKomi);
   void setRootHintLoc(Loc loc);
-  void setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec);
+  void setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec, bool reuseRootTree = false);
   void setAvoidMoveUntilRescaleRoot(bool b);
   //Exception to the above: does not stop the search. Safe to call at any time, including during a search,
   //and takes effect for its subsequent playouts.

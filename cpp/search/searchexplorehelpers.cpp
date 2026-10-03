@@ -327,7 +327,7 @@ double Search::getFpuValueForChildrenAssumeVisited(
 void Search::selectChildToMatchVisitCapSnapshot(
   const VisitCapSnapshot& snapshot, ConstSearchNodeChildrenReference children,
   const float* policyProbs, double parentWeightPerVisit, bool countEdgeVisit,
-  bool focusPlayout, Loc focusTarget,
+  bool focusPlayout, Loc focusTarget, bool isRoot,
   int& numChildrenFound, int& bestChildIdx, Loc& bestChildMoveLoc
 ) const {
   int childrenCapacity = children.getCapacity();
@@ -351,6 +351,7 @@ void Search::selectChildToMatchVisitCapSnapshot(
     Loc moveLoc = childPointer.getMoveLocRelaxed();
     int movePos = getPos(moveLoc);
     float nnPolicyProb = policyProbs[movePos];
+    bool excluded = isRoot && isReuseExcludedRootMove(moveLoc);
 
     double childWeight;
     if(countEdgeVisit)
@@ -358,9 +359,11 @@ void Search::selectChildToMatchVisitCapSnapshot(
     else
       childWeight = child->stats.weightSum.load(std::memory_order_acquire);
     childWeight += child->virtualLosses.load(std::memory_order_acquire) * searchParams.numVirtualLossesPerThread;
+    if(excluded)
+      childWeight = 0.0;
 
-    //Illegal moves get no share.
-    double frac = nnPolicyProb < 0 ? 0.0 : snapshot.getWeightFrac(movePos);
+    //Illegal and masked moves get no share and masked retained weight cannot change deficits.
+    double frac = nnPolicyProb < 0 || excluded ? 0.0 : snapshot.getWeightFrac(movePos);
     childWeightBuf[i] = childWeight;
     childFracBuf[i] = frac;
     totalWeight += childWeight;
@@ -368,7 +371,7 @@ void Search::selectChildToMatchVisitCapSnapshot(
 
     if(focusPlayout && moveLoc == focusTarget) {
       focusTargetIsExistingChild = true;
-      if(nnPolicyProb >= 0) {
+      if(nnPolicyProb >= 0 && !excluded) {
         bestChildIdx = i;
         bestChildMoveLoc = moveLoc;
       }
@@ -477,7 +480,7 @@ void Search::selectBestChildToDescend(
       double parentWeightPerVisit = weightSum / (double)std::max((int64_t)1, visits);
       selectChildToMatchVisitCapSnapshot(
         *visitCapSnapshot, children, policyProbs, parentWeightPerVisit, countEdgeVisit,
-        focusPlayout, focusTarget,
+        focusPlayout, focusTarget, isRoot,
         numChildrenFound, bestChildIdx, bestChildMoveLoc
       );
       return;
@@ -490,6 +493,8 @@ void Search::selectBestChildToDescend(
     if(child == NULL)
       break;
     Loc moveLoc = childPointer.getMoveLocRelaxed();
+    if(isRoot && isReuseExcludedRootMove(moveLoc))
+      continue;
     int movePos = getPos(moveLoc);
     float nnPolicyProb = policyProbs[movePos];
     if(nnPolicyProb < 0)
@@ -551,6 +556,8 @@ void Search::selectBestChildToDescend(
         if(child == NULL)
           break;
         Loc moveLoc = childPointer.getMoveLocRelaxed();
+        if(isRoot && isReuseExcludedRootMove(moveLoc))
+          continue;
         int movePos = getPos(moveLoc);
         float nnPolicyProb = policyProbs[movePos];
         if(nnPolicyProb < 0)
@@ -573,6 +580,8 @@ void Search::selectBestChildToDescend(
       const SearchNode* child = childPointer.getIfAllocated();
       if(child == NULL)
         break;
+      if(isRoot && isReuseExcludedRootMove(childPointer.getMoveLocRelaxed()))
+        continue;
       double childWeight = child->stats.weightSum.load(std::memory_order_acquire);
       totalChildWeight += childWeight;
       if(childWeight > maxChildWeight)
@@ -610,6 +619,9 @@ void Search::selectBestChildToDescend(
     int64_t childEdgeVisits = childPointer.getEdgeVisits();
 
     Loc moveLoc = childPointer.getMoveLocRelaxed();
+    posesWithChildBuf[getPos(moveLoc)] = true;
+    if(isRoot && isReuseExcludedRootMove(moveLoc))
+      continue;
     bool isDuringSearch = true;
     double selectionValue = getExploreSelectionValueOfChild(
       node,policyProbs,child,
@@ -635,7 +647,6 @@ void Search::selectBestChildToDescend(
       bestChildMoveLoc = moveLoc;
     }
 
-    posesWithChildBuf[getPos(moveLoc)] = true;
   }
 
   const std::vector<int>& avoidMoveUntilByLoc = thread.pla == P_BLACK ? avoidMoveUntilByLocBlack : avoidMoveUntilByLocWhite;
