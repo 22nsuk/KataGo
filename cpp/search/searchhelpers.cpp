@@ -334,7 +334,7 @@ bool Search::isAllowedRootMove(Loc moveLoc) const {
       return false;
   }
 
-  if(searchParams.rootSymmetryPruning && moveLoc != Board::PASS_LOC && rootSymDupLoc[moveLoc]) {
+  if(rootSymmetryPruningEnabled() && moveLoc != Board::PASS_LOC && rootSymDupLoc[moveLoc]) {
     return false;
   }
 
@@ -345,7 +345,7 @@ bool Search::isAllowedRootMove(Loc moveLoc) const {
 void Search::computeRootSymRepresentativeLocs() {
   for(Loc loc = 0; loc < Board::MAX_ARR_SIZE; loc++) {
     rootSymRepresentativeLoc[loc] = loc;
-    if(!searchParams.rootSymmetryPruning || loc == Board::PASS_LOC || !rootBoard.isOnBoard(loc) || !rootSymDupLoc[loc])
+    if(!rootSymmetryPruningEnabled() || loc == Board::PASS_LOC || !rootBoard.isOnBoard(loc) || !rootSymDupLoc[loc])
       continue;
     rootSymRepresentativeLoc[loc] = Board::NULL_LOC;
     for(int symmetry: rootSymmetries) {
@@ -506,7 +506,7 @@ bool Search::shouldSuppressPass(const SearchNode* n) const {
     if(child == NULL)
       break;
     Loc moveLoc = childPointer.getMoveLocRelaxed();
-    if(moveLoc == Board::PASS_LOC)
+    if(moveLoc == Board::PASS_LOC || isReuseExcludedRootMove(moveLoc))
       continue;
     int pos = NNPos::locToPos(moveLoc,rootBoard.x_size,nnXLen,nnYLen);
     double plaOwnership = rootPla == P_WHITE ? whiteOwnerMap[pos] : -whiteOwnerMap[pos];

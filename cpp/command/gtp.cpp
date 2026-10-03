@@ -62,6 +62,7 @@ static const vector<string> knownCommands = {
 
   //Clears neural net cached evaluations and bot search tree, allows fresh randomization
   "clear_cache",
+  "kg-reuse-root-tree", // Capability query: supports reuseRootTree on kata-analyze.
 
   "showboard",
   "fixed_handicap",
@@ -757,6 +758,7 @@ struct GTPEngine {
     bool showPVVisits = false;
     bool showPVEdgeVisits = false;
     bool showNoResultValue = false;
+    bool reuseRootTree = false;
     double secondsPerReport = TimeControls::UNLIMITED_TIME_DEFAULT;
     vector<int> avoidMoveUntilByLocBlack;
     vector<int> avoidMoveUntilByLocWhite;
@@ -1155,7 +1157,7 @@ struct GTPEngine {
     double searchFactor = PlayUtils::getSearchFactor(gargs.searchFactorWhenWinningThreshold,gargs.searchFactorWhenWinning,paramsToUse,recentWinLossValues,pla);
     lastSearchFactor = searchFactor;
 
-    bot->setAvoidMoveUntilByLoc(args.avoidMoveUntilByLocBlack,args.avoidMoveUntilByLocWhite);
+    bot->setAvoidMoveUntilByLoc(args.avoidMoveUntilByLocBlack,args.avoidMoveUntilByLocWhite,args.reuseRootTree);
     bot->setRootFocus(args.focusMoves,args.focusWeights,args.focusProb);
 
     //So that we can tell by the end of the search whether we still care for the result.
@@ -1428,7 +1430,7 @@ struct GTPEngine {
     }
 
     std::function<void(const Search* search)> callback = getAnalyzeCallback(pla,args);
-    bot->setAvoidMoveUntilByLoc(args.avoidMoveUntilByLocBlack,args.avoidMoveUntilByLocWhite);
+    bot->setAvoidMoveUntilByLoc(args.avoidMoveUntilByLocBlack,args.avoidMoveUntilByLocWhite,args.reuseRootTree);
     bot->setRootFocus(args.focusMoves,args.focusWeights,args.focusProb);
     if(args.showOwnership || args.showOwnershipStdev || args.showMovesOwnership || args.showMovesOwnershipStdev)
       bot->setAlwaysIncludeOwnerMap(true);
@@ -1767,6 +1769,7 @@ static GTPEngine::AnalyzeArgs parseAnalyzeCommand(
   bool showPVVisits = false;
   bool showPVEdgeVisits = false;
   bool showNoResultValue = false;
+  bool reuseRootTree = false;
   vector<int> avoidMoveUntilByLocBlack;
   vector<int> avoidMoveUntilByLocWhite;
   bool gotAvoidMovesBlack = false;
@@ -1883,6 +1886,9 @@ static GTPEngine::AnalyzeArgs parseAnalyzeCommand(
 
       continue;
     }
+    else if(isKata && key == "reuseRootTree" && Global::tryStringToBool(value,reuseRootTree)) {
+      continue;
+    }
     else if(key == "focus") {
       //Can only be specified once. Parse one more argument.
       if(gotFocus || pieces.size() < numArgsParsed+1) {
@@ -1978,6 +1984,7 @@ static GTPEngine::AnalyzeArgs parseAnalyzeCommand(
   args.showPVVisits = showPVVisits;
   args.showPVEdgeVisits = showPVEdgeVisits;
   args.showNoResultValue = showNoResultValue;
+  args.reuseRootTree = reuseRootTree;
   args.avoidMoveUntilByLocBlack = avoidMoveUntilByLocBlack;
   args.avoidMoveUntilByLocWhite = avoidMoveUntilByLocWhite;
   args.focusMoves = focusMoves;
@@ -3290,6 +3297,10 @@ int MainCmds::gtp(const vector<string>& args) {
       }
     }
 
+    else if(command == "kg-reuse-root-tree") {
+      responseIsError = !pieces.empty();
+      response = responseIsError ? "Expected no arguments" : "root-only-v1";
+    }
     else if(command == "clear_cache") {
       engine->clearCache();
     }

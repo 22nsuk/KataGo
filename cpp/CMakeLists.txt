@@ -717,6 +717,12 @@ message(STATUS "Building 'katago' executable for GTP engine and other tools.")
 if(USE_BACKEND STREQUAL "CUDA")
   message(STATUS "-DUSE_BACKEND=CUDA, using CUDA backend.")
 
+  # enable_language initializes an inferred default architecture. Remember whether the
+  # caller supplied one first, so a reproducible single-GPU build keeps its explicit target.
+  set(_katago_cuda_architectures_given FALSE)
+  if(DEFINED CMAKE_CUDA_ARCHITECTURES OR NOT "$ENV{CUDAARCHS}" STREQUAL "")
+    set(_katago_cuda_architectures_given TRUE)
+  endif()
   enable_language(CUDA)
 
   # cudabackend.cpp, cudautils.cpp, and cudahelpers.cu are thin wrappers around
@@ -754,7 +760,9 @@ if(USE_BACKEND STREQUAL "CUDA")
     set_source_files_properties(neuralnet/cudabackend.cpp PROPERTIES COMPILE_OPTIONS "-Wno-null-dereference")
   endif()
 # https://en.wikipedia.org/wiki/CUDA#GPUs_supported
-  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
+  if(_katago_cuda_architectures_given)
+    message(STATUS "User-specified CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}")
+  elseif(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
     set(CMAKE_CUDA_ARCHITECTURES 75 80 86 87 88 89 90 100 110 103 120 121)
     set(CMAKE_CUDA_FLAGS "-Wno-deprecated-gpu-targets")
   elseif(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
@@ -781,6 +789,9 @@ if(USE_BACKEND STREQUAL "CUDA")
   else()
     message(WARNING "CUDA 10.2 or greater is recommended, but attempting to build anyways")
     set(CMAKE_CUDA_ARCHITECTURES 30 37 53 70)
+  endif()
+  if(NOT _katago_cuda_architectures_given)
+    set(CMAKE_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}" CACHE STRING "CUDA architectures to build" FORCE)
   endif()
 elseif(USE_BACKEND STREQUAL "TENSORRT")
   message(STATUS "-DUSE_BACKEND=TENSORRT, using TensorRT backend.")

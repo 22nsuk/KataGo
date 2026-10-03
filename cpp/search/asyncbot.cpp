@@ -113,9 +113,9 @@ void AsyncBot::setKomiIfNew(float newKomi) {
   stopAndWait();
   search->setKomiIfNew(newKomi);
 }
-void AsyncBot::setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec) {
+void AsyncBot::setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec, bool reuseRootTree) {
   stopAndWait();
-  search->setAvoidMoveUntilByLoc(bVec,wVec);
+  search->setAvoidMoveUntilByLoc(bVec,wVec,reuseRootTree);
 }
 void AsyncBot::setAvoidMoveUntilRescaleRoot(bool b) {
   stopAndWait();

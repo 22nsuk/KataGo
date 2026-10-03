@@ -75,7 +75,7 @@ Search::Search(const SearchParams& params, NNEvaluator* nnEval, NNEvaluator* hum
    rootHistory(),
    rootGraphHash(),
    rootHintLoc(Board::NULL_LOC),
-   avoidMoveUntilByLocBlack(),avoidMoveUntilByLocWhite(),avoidMoveUntilRescaleRoot(false),
+   avoidMoveUntilByLocBlack(),avoidMoveUntilByLocWhite(),rootRestrictionReuseActive(false),rootVisitCapStartVisits(0),avoidMoveUntilRescaleRoot(false),
    rootFocus(nullptr),rootFocusCleanupMutex(),rootFocusToCleanUp(),
    rootSymmetries(),
    rootPruneOnlySymmetries(),
@@ -262,12 +262,39 @@ void Search::setKomiIfNew(float newKomi) {
   applyHistoryModesToRootHistory();
 }
 
-void Search::setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec) {
+void Search::setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec, bool reuseRootTree) {
   if(avoidMoveUntilByLocBlack == bVec && avoidMoveUntilByLocWhite == wVec)
     return;
-  clearSearch();
+  auto rootOnly = [](const std::vector<int>& depths) {
+    return std::all_of(depths.begin(), depths.end(), [](int depth) { return depth >= 0 && depth <= 1; });
+  };
+  // Deeper restrictions change the game searched below a child. Those values cannot be reused.
+  if(!reuseRootTree || !rootOnly(bVec) || !rootOnly(wVec) ||
+     !rootOnly(avoidMoveUntilByLocBlack) || !rootOnly(avoidMoveUntilByLocWhite))
+    clearSearch();
+  else if(rootNode != NULL) {
+    rootRestrictionReuseActive = true;
+    // Give the changed support a fresh cap's worth of normal selection before freezing
+    // its distribution. Retained children must not immediately freeze out unallocated moves.
+    rootVisitCapStartVisits = getRootVisits();
+    // Like all setters here, this runs after the caller has stopped the search.
+    delete rootNode->visitCapSnapshot.exchange(NULL, std::memory_order_acq_rel);
+  }
   avoidMoveUntilByLocBlack = bVec;
   avoidMoveUntilByLocWhite = wVec;
+}
+
+bool Search::isReuseExcludedRootMove(Loc loc) const {
+  if(!rootRestrictionReuseActive)
+    return false;
+  const auto& depths = rootPla == P_BLACK ? avoidMoveUntilByLocBlack : avoidMoveUntilByLocWhite;
+  return loc >= 0 && (size_t)loc < depths.size() && depths[loc] > 0;
+}
+
+bool Search::rootSymmetryPruningEnabled() const {
+  // A changed mask can change which symmetric move represents a group. Do not delete a
+  // previously explored representative; allow distinct root children until the next position.
+  return searchParams.rootSymmetryPruning && !rootRestrictionReuseActive;
 }
 
 void Search::setAvoidMoveUntilRescaleRoot(bool b) {
@@ -375,6 +402,8 @@ void Search::setNNEval(NNEvaluator* nnEval) {
 }
 
 void Search::clearSearch() {
+  rootRestrictionReuseActive = false;
+  rootVisitCapStartVisits = 0;
   effectiveSearchTimeCarriedOver = 0.0;
   if(rootNode != NULL) {
     deleteAllTableNodesMulithreaded();
@@ -472,6 +501,8 @@ bool Search::makeMove(Loc moveLoc, Player movePla, bool preventEncore) {
   }
 
   //Explicitly clear avoid move arrays and focus moves when we play a move - user needs to respecify them if they want them.
+  rootRestrictionReuseActive = false;
+  rootVisitCapStartVisits = 0;
   avoidMoveUntilByLocBlack.clear();
   avoidMoveUntilByLocWhite.clear();
   setRootFocus(std::vector<Loc>(), std::vector<double>(), 0.0);
@@ -784,7 +815,7 @@ void Search::beginSearch(bool pondering) {
       rootNode->patternBonusHash = Hash128();
   }
 
-  if(searchParams.rootSymmetryPruning) {
+  if(rootSymmetryPruningEnabled()) {
     const std::vector<int>& avoidMoveUntilByLoc = rootPla == P_BLACK ? avoidMoveUntilByLocBlack : avoidMoveUntilByLocWhite;
     if(rootPruneOnlySymmetries.size() > 0)
       SymmetryHelpers::markDuplicateMoveLocs(rootBoard,rootHistory,&rootPruneOnlySymmetries,avoidMoveUntilByLoc,rootSymDupLoc,rootSymmetries);
@@ -892,6 +923,9 @@ void Search::beginSearch(bool pondering) {
 
         //Set the visits in place
         while(node.statsLock.test_and_set(std::memory_order_acquire));
+        int64_t oldNumVisits = node.stats.visits.load(std::memory_order_acquire);
+        if(newNumVisits < oldNumVisits)
+          rootVisitCapStartVisits = std::max((int64_t)0, rootVisitCapStartVisits - (oldNumVisits - newNumVisits));
         node.stats.visits.store(newNumVisits,std::memory_order_release);
         node.statsLock.clear(std::memory_order_release);
 
@@ -919,6 +953,11 @@ void Search::beginSearch(bool pondering) {
       }
     }
   }
+
+  // Root values must describe the allowed choices, without resetting retained visits or
+  // touching the child values. This also restores aggregate values when a filter is cleared.
+  if(rootRestrictionReuseActive && rootNode != NULL && rootNode->getNNOutput() != NULL)
+    recomputeNodeStats(*rootNode, dummyThread, 0, true);
 
   //Clear unused stuff in value bias table since we may have pruned rootNode stuff
   if(searchParams.subtreeValueBiasFactor != 0 && subtreeValueBiasTable != NULL)

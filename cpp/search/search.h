@@ -100,6 +100,14 @@ struct Search {
   //of depth that it should be banned.
   std::vector<int> avoidMoveUntilByLocBlack;
   std::vector<int> avoidMoveUntilByLocWhite;
+  // KG-next: a root-only filter may mask existing children instead of discarding them.
+  // Kept until the position changes so clearing the filter also restores symmetric children.
+  bool rootRestrictionReuseActive;
+  // Root visits retained before the latest mask transition. Only new counted visits
+  // consume the root's visit-cap warmup; lifetime visits still count toward maxVisits.
+  int64_t rootVisitCapStartVisits;
+  bool isReuseExcludedRootMove(Loc loc) const;
+  bool rootSymmetryPruningEnabled() const;
   bool avoidMoveUntilRescaleRoot; // When avoiding moves at the root, rescale the root policy to sum to 1.
 
   //External user-specified moves at the root that should receive extra search. With probability prob, each playout
@@ -264,7 +272,7 @@ struct Search {
   void setPlayerIfNew(Player pla);
   void setKomiIfNew(float newKomi); //Does not clear history, does clear search unless komi is equal.
   void setRootHintLoc(Loc hintLoc);
-  void setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec);
+  void setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec, bool reuseRootTree = false);
   void setAvoidMoveUntilRescaleRoot(bool b);
   //Does not clear search. Pass empty vectors to cancel any focus. Weights must be parallel to moves and positive.
   //Unlike the other setters, this is safe to call at any time, including concurrently with a running search,
@@ -650,7 +658,7 @@ private:
   void selectChildToMatchVisitCapSnapshot(
     const VisitCapSnapshot& snapshot, ConstSearchNodeChildrenReference children,
     const float* policyProbs, double parentWeightPerVisit, bool countEdgeVisit,
-    bool focusPlayout, Loc focusTarget,
+    bool focusPlayout, Loc focusTarget, bool isRoot,
     int& numChildrenFound, int& bestChildIdx, Loc& bestChildMoveLoc
   ) const;
 
@@ -809,6 +817,7 @@ private:
     double pruneProp,
     double desiredProp,
     double thisNodeWeight,
+    bool isRoot,
     ConstSearchNodeChildrenReference children,
     double* childWeightBuf,
     int childrenCapacity,

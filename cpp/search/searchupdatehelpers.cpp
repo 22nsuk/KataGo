@@ -181,6 +181,8 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int numV
     MoreNodeStats& stats = statsBuf[numGoodChildren];
 
     Loc moveLoc = childPointer.getMoveLocRelaxed();
+    if(isRoot && isReuseExcludedRootMove(moveLoc))
+      continue;
     int64_t edgeVisits = childPointer.getEdgeVisits();
     stats.stats = NodeStats(child->stats);
 
@@ -204,6 +206,8 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int numV
     int64_t visitCap = getVisitCap(node.nextPla);
     if(visitCap > 0 && numGoodChildren > 0 && node.visitCapSnapshot.load(std::memory_order_acquire) == NULL) {
       int64_t newVisits = node.stats.visits.load(std::memory_order_acquire) + numVisitsToAdd;
+      if(isRoot)
+        newVisits -= rootVisitCapStartVisits;
       if(newVisits >= visitCap) {
         newVisitCapSnapshot = new VisitCapSnapshot();
         newVisitCapSnapshot->entries.reserve(numGoodChildren);

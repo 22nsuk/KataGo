@@ -1,0 +1,46 @@
+name: Root tree reuse
+on:
+  pull_request:
+    paths:
+      - cpp/**
+      - python/probe_kg_root_reuse.py
+      - .github/workflows/kg-root-reuse.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install native CPU prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y libeigen3-dev zlib1g-dev libzip-dev ninja-build
+      - name: Build this engine revision
+        run: |
+          cmake -S cpp -B "$RUNNER_TEMP/kg-build" -G Ninja -DUSE_BACKEND=EIGEN -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/kg-build" --parallel 2
+      - name: Check native invariants
+        working-directory: cpp
+        run: |
+          "$RUNNER_TEMP/kg-build/katago" runtests > "$RUNNER_TEMP/kg-runtests.log"
+          "$RUNNER_TEMP/kg-build/katago" runoutputtests > "$RUNNER_TEMP/kg-runoutputtests.log"
+      - name: Check both colors, threads, ownership, and root visit caps
+        run: |
+          for player in B W; do
+            for threads in 1 4; do
+              python3 python/probe_kg_root_reuse.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/kg-proof/$player-$threads" --player "$player" --threads "$threads" --ownership
+            done
+            python3 python/probe_kg_root_reuse.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/kg-proof/$player-cap" --player "$player" --threads 4 --ownership --root-visit-cap 32
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: root-reuse-proof
+          path: |
+            ${{ runner.temp }}/kg-proof/
+            ${{ runner.temp }}/kg-runtests.log
+            ${{ runner.temp }}/kg-runoutputtests.log
+          retention-days: 7
