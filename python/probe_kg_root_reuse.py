@@ -14,6 +14,9 @@ import threading
 import time
 
 
+VISIT_BUDGET = 64
+
+
 class Probe:
     def __init__(self, executable: Path, model: Path, config: Path, player: str, ownership: bool):
         self.player = player
@@ -149,6 +152,26 @@ class Probe:
                 return {**self.last, 'firstVisits': first, 'restriction': restrictions}
         raise AssertionError('Search visit target timed out')
 
+    def bounded_search(self, restrictions: str, reuse: bool = True) -> dict:
+        self.last = None
+        self.command(f'kata-search_analyze {self.player} interval 1 rootInfo true pvEdgeVisits true minmoves 30 '
+                     + ('ownership true movesOwnership true ' if self.ownership else '')
+                     + ('reuseRootTree true ' if reuse else '') + restrictions)
+        assert self.last is not None, ('Missing bounded analysis', restrictions)
+        return {**self.last, 'restriction': f'bounded {restrictions}'}
+
+    def warm_bounded(self, restrictions: str, minimum: int, previous: int | None = None,
+                     reuse: bool = True) -> dict:
+        while True:
+            current = self.bounded_search(restrictions, reuse)
+            if previous is not None:
+                assert current['visits'] >= previous + VISIT_BUDGET, (
+                    'Unchanged bounded restriction must retain the tree and add new playouts',
+                    restrictions, previous, current)
+            if current['visits'] >= minimum:
+                return current
+            previous = current['visits']
+
     def close(self):
         if self.process.poll() is None:
             try:
@@ -170,7 +193,7 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
     with tempfile.TemporaryDirectory(prefix='kg-root-reuse-') as directory:
         config = Path(directory) / 'gtp.cfg'
         config.write_text(
-            f'rules = chinese\nnumSearchThreads = {threads}\nmaxVisits = 64\n'
+            f'rules = chinese\nnumSearchThreads = {threads}\nmaxPlayouts = {VISIT_BUDGET}\n'
             'maxTime = 1000000000\nrootSymmetryPruning = true\n'
             'logToStderr = true\nlogAllGTPCommunication = false\nlogSearchInfo = false\n'
             'reportAnalysisWinratesAs = BLACK\nanalysisPVLen = 8\n'
@@ -240,32 +263,48 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
             cleared = probe.search('', current['visits'] + 100, current['visits'])
             assert cleared['moves'].get(selected, 0) >= restricted['moves'][selected]
             results.append(cleared)
-            deep = probe.search(f'avoid b {selected} 2', 1000)
-            assert deep['firstVisits'] < cleared['visits'], 'Deeper restrictions must invalidate child evaluations'
+
+            # First timed reports can exceed an old tree's visits on a warm GPU. Keep
+            # every reset and its predecessor in bounded mode with identical parameters:
+            # switching from kata-analyze to kata-search_analyze itself clears the tree.
+            reset_upper_bound = VISIT_BUDGET + threads
+            warm_minimum = max(1000, reset_upper_bound + 1)
+            warm = probe.warm_bounded('', warm_minimum)
+            results.append(warm)
+
+            def bounded_reset(restrictions: str, previous: dict, reason: str,
+                              reuse: bool = True) -> dict:
+                assert previous['visits'] > reset_upper_bound, ('Reset predecessor must be warm', previous)
+                result = probe.bounded_search(restrictions, reuse)
+                # Allow for in-flight parallel playouts at the stop check. A retained
+                # warm tree cannot fit within this bound.
+                assert VISIT_BUDGET <= result['visits'] <= reset_upper_bound, (reason, previous, result)
+                results.append({**result, 'resetFromVisits': previous['visits'], 'resetReason': reason})
+                return result
+
+            deep = bounded_reset(f'avoid b {selected} 2', warm,
+                                 'Deeper restrictions must invalidate child evaluations')
+            deep = probe.warm_bounded(f'avoid b {selected} 2', warm_minimum, deep['visits'])
             results.append(deep)
-            shallow = probe.search('', 1500)
-            assert shallow['firstVisits'] < deep['visits'], 'Removing deeper restrictions must also invalidate the tree'
+            shallow = bounded_reset('', deep, 'Removing deeper restrictions must also invalidate the tree')
+            shallow = probe.warm_bounded('', max(1500, warm_minimum), shallow['visits'])
             results.append(shallow)
             # An unmodified caller without the extension retains the upstream clearing contract.
-            legacy = probe.search(f'avoid b {selected} 1', 100, reuse=False)
-            assert legacy['firstVisits'] < shallow['visits']
+            legacy = bounded_reset(f'avoid b {selected} 1', shallow,
+                                   'Legacy changed restrictions must invalidate the tree', reuse=False)
+            legacy = probe.warm_bounded(f'avoid b {selected} 1', warm_minimum, legacy['visits'], reuse=False)
             results.append(legacy)
             probe.command('clear_cache')
-            fresh = probe.search('', 50)
-            assert fresh['firstVisits'] < shallow['visits']
-            results.append(fresh)
+            bounded_reset('', legacy, 'clear_cache must invalidate the tree')
             # Continuous kata-analyze above ignores configured move limits. Bounded
-            # kata-search_analyze retains maxVisits' lifetime-counting semantics.
+            # warmups obeyed maxPlayouts' new-work limit. Only now change parameters
+            # and clear the tree to check maxVisits' lifetime-counting semantics.
+            probe.command(f'kata-set-param maxVisits {VISIT_BUDGET}')
             probe.command('clear_cache')
             bounded = []
             for move in ['D4', 'F6']:
-                probe.last = None
-                probe.command(f'kata-search_analyze {player} interval 1 rootInfo true pvEdgeVisits true '
-                              + ('ownership true movesOwnership true ' if ownership else '')
-                              + f'minmoves 30 reuseRootTree true allow b {move} 1 allow w {move} 1')
-                assert probe.last is not None
-                bounded.append({**probe.last, 'restriction': f'bounded allow {move}'})
-            assert bounded[0]['visits'] >= 64, bounded
+                bounded.append(probe.bounded_search(f'allow b {move} 1 allow w {move} 1'))
+            assert bounded[0]['visits'] >= VISIT_BUDGET, bounded
             assert bounded[1]['visits'] == bounded[0]['visits'], bounded
             assert bounded[1]['moves'].get('F6', 0) == 0, bounded
             results.extend(bounded)
