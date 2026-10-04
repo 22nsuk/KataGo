@@ -25,23 +25,30 @@ using namespace std;
 static bool isNearEndByOwnership(
   int boardArea, int blackWhiteVeryDifferent, int blackCountUnsettled, int whiteCountUnsettled
 ) {
-  const double maxFractionOfBoardUnsettled = 0.10 + 6.0 / boardArea;
+  // count / boardArea < 0.10 + 6.0 / boardArea, compared exactly for positive board areas.
+  // Widen before scaling to avoid both integer truncation and floating-point boundary drift.
+  const int64_t maxScaledUnsettled = (int64_t)boardArea + 60;
   return
-    (double)blackWhiteVeryDifferent / boardArea < maxFractionOfBoardUnsettled
-    && (double)blackCountUnsettled / boardArea < maxFractionOfBoardUnsettled
-    && (double)whiteCountUnsettled / boardArea < maxFractionOfBoardUnsettled;
+    10LL * blackWhiteVeryDifferent < maxScaledUnsettled
+    && 10LL * blackCountUnsettled < maxScaledUnsettled
+    && 10LL * whiteCountUnsettled < maxScaledUnsettled;
 }
 
 void Tests::runTrainingDataEndTests() {
   cout << "Running scored-game near-end ownership tests" << endl;
   struct TestCase {
-    int boardSize;
+    int xSize;
+    int ySize;
     int lastAllowedCount;
   };
+  // Rectangles exercise exact thresholds that the fractional comparison can round upward.
   // 10x10 also checks the strict comparison at the exact 16-point threshold.
-  const TestCase cases[] = {{9,14}, {10,15}, {13,22}, {19,42}};
+  const TestCase cases[] = {
+    {5,6,8}, {9,9,14}, {9,10,14}, {10,10,15}, {10,12,17},
+    {10,19,24}, {13,13,22}, {14,15,26}, {15,18,32}, {19,19,42}
+  };
   for(const TestCase& testCase: cases) {
-    int boardArea = testCase.boardSize * testCase.boardSize;
+    int boardArea = testCase.xSize * testCase.ySize;
     // Sweep zero, both sides of the threshold, half the board, and the full board.
     // Each counter must reject independently, even when the other two are zero.
     for(int count = 0; count <= boardArea; count++) {
