@@ -42,11 +42,20 @@ Repeated requests with the same restriction do not restart the interval, and foc
 visits do not consume it. Snapshots below root remain valid. Masked child weight is
 excluded from the capped root's deficit calculation.
 
-Once a mask transition retains the tree, symmetry pruning remains disabled at that
-root until the tree is cleared or the position changes. This keeps an explored
-representative from being deleted when a later mask chooses another symmetry.
-It can increase the number of root children and memory used at that position. A first
-restricted search with no existing tree keeps normal symmetry pruning enabled.
+When a mask transition retains the tree, symmetry pruning stays enabled only if the
+new duplicate-location mask and valid symmetry list are identical to those used by
+the retained tree. For example, excluding only pass or changing only the other
+player's first-ply restrictions does not change board symmetry representatives.
+Existing representative visits and their symmetric analysis rows then remain shared.
+
+If that comparison changes, symmetry pruning is disabled until the tree is cleared
+or the position changes, even after the restriction is removed. This protects all
+retained children, including hidden ones, from being deleted as duplicate moves.
+It can increase the number of root children and memory used at that position. A
+formerly shared analysis row can then start an independent child with fewer visits;
+transferring a representative's tree to another symmetric coordinate is not part of
+this extension. A first restricted search with no existing tree keeps normal symmetry
+pruning enabled. This distinction does not change visit-cap restart or search limits.
 
 A change involving a depth greater than one clears the tree, including the change
 back to a first-ply or empty restriction. Requests without `reuseRootTree true`
@@ -96,5 +105,10 @@ search limits. Native NN-less search tests additionally verify cap reformation a
 fresh counted visits, unchanged-mask restarts, per-request playout budgets, the allowed
 9:1 distribution with a hidden 10000-visit child, and Japanese dame-filling pass selection. The CI
 workflow tests both colors with one and four threads and additional capped searches.
+Symmetry regressions cover pass-only and inactive-color restrictions, excluding a
+nonrepresentative, equivalent empty/all-zero masks, retained children and visits,
+representative changes, sticky pruning disablement, and resets on clearing or playing
+a move. Real-process checks also verify that unchanged representatives keep their
+shared analysis rows and that excluded moves never appear in those rows.
 
 Windows CUDA build instructions are in [KG_CUDA13_WINDOWS.md](KG_CUDA13_WINDOWS.md).

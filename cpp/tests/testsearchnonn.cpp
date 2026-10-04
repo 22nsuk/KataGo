@@ -25,44 +25,152 @@ using namespace TestSearchCommon;
 static void runRootReuseInvariantTests(const string& modelFile, Logger& logger) {
   NNEvaluator* nnEval = startNNEval(modelFile,logger,"root-reuse-invariants",9,9,0,true,false,false,true,false);
   Board board(9,9);
-  {
-    SearchParams params;
-    params.maxVisits = 80;
-    params.rootSymmetryPruning = true;
-    Search search(params,nnEval,&logger,"root-reuse-fresh-symmetry");
-    BoardHistory hist(board,P_BLACK,Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
-    search.setPosition(P_BLACK,board,hist);
-    vector<int> mask(Board::MAX_ARR_SIZE,0);
-    mask[Board::PASS_LOC] = 1;
-    search.setAvoidMoveUntilByLoc(mask,{},true);
-    search.runWholeSearch(P_BLACK);
-    // No prior tree needed preserving, and avoiding pass does not break board symmetry.
-    testAssert(search.rootSymmetries.size() == 8);
-    int representatives = 0;
-    for(int y = 0; y<9; y++)
-      for(int x = 0; x<9; x++)
-        representatives += !search.rootSymDupLoc[Location::getLoc(x,y,board.x_size)];
-    testAssert(representatives == 15);
-    SearchNode* retainedRoot = search.rootNode;
-    auto children = retainedRoot->getChildren();
-    SearchNode* retainedChild = children[0].getIfAllocated();
-    Loc retainedMove = children[0].getMoveLoc();
-    int64_t retainedEdgeVisits = children[0].getEdgeVisits();
-    mask[retainedMove] = 1;
-    search.setAvoidMoveUntilByLoc(mask,{},true);
-    search.beginSearch(false);
-    testAssert(search.rootNode == retainedRoot);
-    testAssert(!search.rootSymmetryPruningEnabled());
-    testAssert(children[0].getIfAllocated() == retainedChild);
-    testAssert(children[0].getEdgeVisits() == retainedEdgeVisits);
-    search.setAvoidMoveUntilByLoc({}, {}, true);
-    search.beginSearch(false);
-    testAssert(children[0].getIfAllocated() == retainedChild);
-    testAssert(children[0].getEdgeVisits() == retainedEdgeVisits);
-    search.clearSearch();
-    search.setAvoidMoveUntilByLoc(mask,{},true);
-    search.beginSearch(false);
-    testAssert(search.rootSymmetryPruningEnabled());
+  for(Player pla: {P_BLACK,P_WHITE}) {
+    for(int numThreads: {1,4}) {
+      SearchParams params;
+      params.maxVisits = 80;
+      params.numThreads = numThreads;
+      params.cpuctExploration *= 4;
+      params.rootSymmetryPruning = true;
+      Search search(params,nnEval,&logger,"root-reuse-fresh-symmetry");
+      BoardHistory hist(board,pla,Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+      search.setPosition(pla,board,hist);
+      auto setMask = [&](const vector<int>& active, const vector<int>& inactive) {
+        search.setAvoidMoveUntilByLoc(pla == P_BLACK ? active : inactive,
+                                     pla == P_WHITE ? active : inactive,true);
+      };
+      vector<int> mask(Board::MAX_ARR_SIZE,0);
+      mask[Board::PASS_LOC] = 1;
+      setMask(mask,{});
+      search.runWholeSearch(pla);
+      // No prior tree needed preserving, and avoiding pass does not break board symmetry.
+      testAssert(!search.rootRestrictionReuseActive);
+      testAssert(search.rootSymmetryPruningEnabled());
+      testAssert(search.rootSymmetries.size() == 8);
+      int representatives = 0;
+      for(int y = 0; y<9; y++)
+        for(int x = 0; x<9; x++)
+          representatives += !search.rootSymDupLoc[Location::getLoc(x,y,board.x_size)];
+      testAssert(representatives == 15);
+      SearchNode* retainedRoot = search.rootNode;
+      int64_t retainedVisits = search.getRootVisits();
+      auto children = retainedRoot->getChildren();
+      struct RetainedChild {
+        SearchNode* node;
+        Loc move;
+        int64_t edgeVisits;
+        int64_t visits;
+      };
+      vector<RetainedChild> retainedChildren;
+      Loc retainedMove = Board::NULL_LOC;
+      Loc duplicateMove = Board::NULL_LOC;
+      for(int i = 0; i<children.getCapacity() && children[i].getIfAllocated() != NULL; i++) {
+        SearchNode* child = children[i].getIfAllocated();
+        Loc move = children[i].getMoveLoc();
+        retainedChildren.push_back({child,move,children[i].getEdgeVisits(),child->stats.visits.load()});
+        // Pick an explored representative with a nontrivial orbit. Pass and the center
+        // are singleton orbits, so excluding either would not exercise a representative change.
+        if(retainedMove == Board::NULL_LOC && move != Board::PASS_LOC) {
+          for(int y = 0; y<9; y++) {
+            for(int x = 0; x<9; x++) {
+              Loc loc = Location::getLoc(x,y,board.x_size);
+              if(search.rootSymDupLoc[loc] && search.rootSymRepresentativeLoc[loc] == move) {
+                retainedMove = move;
+                duplicateMove = loc;
+              }
+            }
+          }
+        }
+      }
+      testAssert(retainedMove != Board::NULL_LOC && duplicateMove != Board::NULL_LOC);
+      vector<bool> retainedDupLoc(search.rootSymDupLoc,search.rootSymDupLoc + Board::MAX_ARR_SIZE);
+      vector<int> retainedSymmetries = search.rootSymmetries;
+      auto checkRetained = [&](bool pruningEnabled) {
+        testAssert(search.rootNode == retainedRoot);
+        testAssert(search.getRootVisits() == retainedVisits);
+        testAssert(search.rootRestrictionReuseActive);
+        testAssert(search.rootSymmetryPruningEnabled() == pruningEnabled);
+        auto currentChildren = search.rootNode->getChildren();
+        testAssert(currentChildren.getCapacity() == children.getCapacity());
+        for(int i = 0; i<(int)retainedChildren.size(); i++) {
+          const RetainedChild& retained = retainedChildren[i];
+          testAssert(currentChildren[i].getIfAllocated() == retained.node);
+          testAssert(currentChildren[i].getMoveLoc() == retained.move);
+          testAssert(currentChildren[i].getEdgeVisits() == retained.edgeVisits);
+          testAssert(retained.node->stats.visits.load() == retained.visits);
+        }
+        if((int)retainedChildren.size() < currentChildren.getCapacity())
+          testAssert(currentChildren[retainedChildren.size()].getIfAllocated() == NULL);
+        if(pruningEnabled) {
+          testAssert(search.rootSymmetries == retainedSymmetries);
+          for(int loc = 0; loc<Board::MAX_ARR_SIZE; loc++)
+            testAssert(search.rootSymDupLoc[loc] == retainedDupLoc[loc]);
+        }
+        else {
+          testAssert(search.rootSymmetries == vector<int>({0}));
+          for(int loc = 0; loc<Board::MAX_ARR_SIZE; loc++)
+            testAssert(!search.rootSymDupLoc[loc]);
+        }
+      };
+      auto transition = [&](const vector<int>& active, const vector<int>& inactive, bool pruningEnabled) {
+        setMask(active,inactive);
+        search.beginSearch(false);
+        checkRetained(pruningEnabled);
+      };
+      // Equivalent support, pass-only changes, inactive-color restrictions, and excluding
+      // an existing duplicate leave the root's representatives and symmetries unchanged.
+      transition({}, {}, true);
+      vector<int> allZero(Board::MAX_ARR_SIZE,0);
+      transition(allZero,allZero,true);
+      transition({}, {}, true);
+      transition(mask,{},true);
+      mask[Board::PASS_LOC] = 0;
+      mask[retainedMove] = 1;
+      transition({},mask,true);
+      mask[retainedMove] = 0;
+      mask[duplicateMove] = 1;
+      transition(mask,{},true);
+      testAssert(search.isReuseExcludedRootMove(duplicateMove));
+      testAssert(!search.isReuseExcludedRootMove(retainedMove));
+      // Excluding the representative changes the duplicate map. Keep its child hidden
+      // without pruning it, and never reactivate symmetry pruning on this retained tree.
+      mask[duplicateMove] = 0;
+      mask[retainedMove] = 1;
+      transition(mask,{},false);
+      testAssert(search.isReuseExcludedRootMove(retainedMove));
+      transition({}, {}, false);
+      testAssert(!search.isReuseExcludedRootMove(retainedMove));
+      transition(allZero,allZero,false);
+      search.clearSearch();
+      testAssert(!search.rootRestrictionReuseActive);
+      setMask(mask,{});
+      search.runWholeSearch(pla);
+      testAssert(!search.rootRestrictionReuseActive);
+      testAssert(search.rootSymmetryPruningEnabled());
+      testAssert(search.rootSymmetries.size() == 8);
+      // The fresh tree used another representative. Removing that mask disables pruning
+      // again, then playing an explored move must reset the sticky state even on promotion.
+      setMask({},{});
+      search.beginSearch(false);
+      testAssert(!search.rootSymmetryPruningEnabled());
+      auto freshChildren = search.rootNode->getChildren();
+      Loc playedMove = Board::NULL_LOC;
+      int64_t bestEdgeVisits = 0;
+      for(int i = 0; i<freshChildren.getCapacity() && freshChildren[i].getIfAllocated() != NULL; i++) {
+        if(freshChildren[i].getMoveLoc() != Board::PASS_LOC &&
+           freshChildren[i].getIfAllocated()->getNNOutput() != NULL && freshChildren[i].getEdgeVisits() > bestEdgeVisits) {
+          playedMove = freshChildren[i].getMoveLoc();
+          bestEdgeVisits = freshChildren[i].getEdgeVisits();
+        }
+      }
+      testAssert(playedMove != Board::NULL_LOC);
+      testAssert(search.makeMove(playedMove,pla));
+      testAssert(search.rootNode != NULL);
+      testAssert(!search.rootRestrictionReuseActive);
+      testAssert(search.rootVisitCapStartVisits == 0);
+      search.beginSearch(false);
+      testAssert(search.rootSymmetryPruningEnabled());
+    }
   }
   for(Player pla: {P_BLACK,P_WHITE}) {
     SearchParams params;

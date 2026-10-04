@@ -212,6 +212,63 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
             assert any('isSymmetryOf' in detail for detail in fresh_restricted['moveDetails'].values()), fresh_restricted
             results.append(fresh_restricted)
             probe.command('clear_cache')
+            # Keep these transitions bounded so every request has the same parameters
+            # and retained representative edge visits can be compared at a stopped barrier.
+            symmetric = probe.warm_bounded('', 1000)
+            results.append(symmetric)
+            original_representatives = {move: detail for move, detail in symmetric['moveDetails'].items()
+                                        if 'isSymmetryOf' not in detail and symmetric['moves'][move] > 0
+                                        and 'edgeVisits' in detail}
+            original_aliases = {move: detail['isSymmetryOf']
+                                for move, detail in symmetric['moveDetails'].items()
+                                if detail.get('isSymmetryOf') in original_representatives}
+            assert original_aliases, symmetric
+            representative = max(set(original_aliases.values()), key=lambda move: symmetric['moves'][move])
+            duplicate = next(move for move, real_move in original_aliases.items()
+                             if real_move == representative)
+            active = player.lower()
+            opposite = 'w' if player == 'B' else 'b'
+            previous = symmetric
+            for label, restrictions, forbidden in [
+                ('pass-only', f'avoid {active} pass 1', {'pass'}),
+                ('clear-pass-only', '', set()),
+                ('inactive-color', f'avoid {opposite} {representative} 1', set()),
+                ('nonrepresentative', f'avoid {active} {duplicate} 1', {duplicate}),
+                ('clear-nonrepresentative', '', set()),
+            ]:
+                current = probe.bounded_search(restrictions)
+                assert current['visits'] >= previous['visits'] + VISIT_BUDGET, (label, previous, current)
+                assert not set(current['moves']) & forbidden, (label, current)
+                aliases = {move: detail['isSymmetryOf']
+                           for move, detail in current['moveDetails'].items()
+                           if detail.get('isSymmetryOf') in original_representatives}
+                assert aliases == {move: real_move for move, real_move in original_aliases.items()
+                                   if move not in forbidden}, (label, original_aliases, current)
+                for move, detail in original_representatives.items():
+                    if move not in forbidden:
+                        assert move in current['moveDetails'], (label, move, current)
+                        assert 'isSymmetryOf' not in current['moveDetails'][move], (label, move, current)
+                        assert current['moveDetails'][move]['edgeVisits'] >= detail['edgeVisits'], (label, move, current)
+                results.append({**current, 'symmetryTransition': label})
+                previous = current
+            # A real representative change still disables pruning and retains the hidden
+            # child. Clearing its restriction must restore its accumulated edge visits.
+            changed = probe.bounded_search(f'avoid {active} {representative} 1')
+            assert changed['visits'] >= previous['visits'] + VISIT_BUDGET, changed
+            assert representative not in changed['moves'], changed
+            assert all('isSymmetryOf' not in detail for detail in changed['moveDetails'].values()), changed
+            results.append({**changed, 'symmetryTransition': 'representative-change'})
+            restored_symmetric = probe.bounded_search('')
+            assert restored_symmetric['visits'] >= changed['visits'] + VISIT_BUDGET, restored_symmetric
+            assert restored_symmetric['moveDetails'][representative]['edgeVisits'] >= previous['moveDetails'][representative]['edgeVisits'], restored_symmetric
+            assert all('isSymmetryOf' not in detail for detail in restored_symmetric['moveDetails'].values()), restored_symmetric
+            results.append({**restored_symmetric, 'symmetryTransition': 'sticky-disable-after-clear'})
+            probe.command('clear_cache')
+            fresh_symmetric = probe.bounded_search('')
+            assert VISIT_BUDGET <= fresh_symmetric['visits'] <= VISIT_BUDGET + threads, fresh_symmetric
+            assert any('isSymmetryOf' in detail for detail in fresh_symmetric['moveDetails'].values()), fresh_symmetric
+            results.append({**fresh_symmetric, 'symmetryTransition': 'clear-cache-reset'})
+            probe.command('clear_cache')
             single = probe.search('allow b D4 1 allow w D4 1', 300, allowed={'D4'})
             mixed = probe.search('allow b D4,F6 1 allow w D4,F6 1',
                                  single['visits'] + 250, single['visits'], allowed={'D4', 'F6'})

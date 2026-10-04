@@ -75,7 +75,7 @@ Search::Search(const SearchParams& params, NNEvaluator* nnEval, NNEvaluator* hum
    rootHistory(),
    rootGraphHash(),
    rootHintLoc(Board::NULL_LOC),
-   avoidMoveUntilByLocBlack(),avoidMoveUntilByLocWhite(),rootRestrictionReuseActive(false),rootVisitCapStartVisits(0),avoidMoveUntilRescaleRoot(false),
+   avoidMoveUntilByLocBlack(),avoidMoveUntilByLocWhite(),rootRestrictionReuseActive(false),rootSymmetryPruningDisabledForReuse(false),rootVisitCapStartVisits(0),avoidMoveUntilRescaleRoot(false),
    rootFocus(nullptr),rootFocusCleanupMutex(),rootFocusToCleanUp(),
    rootSymmetries(),
    rootPruneOnlySymmetries(),
@@ -292,9 +292,7 @@ bool Search::isReuseExcludedRootMove(Loc loc) const {
 }
 
 bool Search::rootSymmetryPruningEnabled() const {
-  // A changed mask can change which symmetric move represents a group. Do not delete a
-  // previously explored representative; allow distinct root children until the next position.
-  return searchParams.rootSymmetryPruning && !rootRestrictionReuseActive;
+  return searchParams.rootSymmetryPruning && !rootSymmetryPruningDisabledForReuse;
 }
 
 void Search::setAvoidMoveUntilRescaleRoot(bool b) {
@@ -403,6 +401,7 @@ void Search::setNNEval(NNEvaluator* nnEval) {
 
 void Search::clearSearch() {
   rootRestrictionReuseActive = false;
+  rootSymmetryPruningDisabledForReuse = false;
   rootVisitCapStartVisits = 0;
   effectiveSearchTimeCarriedOver = 0.0;
   if(rootNode != NULL) {
@@ -502,6 +501,7 @@ bool Search::makeMove(Loc moveLoc, Player movePla, bool preventEncore) {
 
   //Explicitly clear avoid move arrays and focus moves when we play a move - user needs to respecify them if they want them.
   rootRestrictionReuseActive = false;
+  rootSymmetryPruningDisabledForReuse = false;
   rootVisitCapStartVisits = 0;
   avoidMoveUntilByLocBlack.clear();
   avoidMoveUntilByLocWhite.clear();
@@ -817,12 +817,26 @@ void Search::beginSearch(bool pondering) {
 
   if(rootSymmetryPruningEnabled()) {
     const std::vector<int>& avoidMoveUntilByLoc = rootPla == P_BLACK ? avoidMoveUntilByLocBlack : avoidMoveUntilByLocWhite;
-    if(rootPruneOnlySymmetries.size() > 0)
-      SymmetryHelpers::markDuplicateMoveLocs(rootBoard,rootHistory,&rootPruneOnlySymmetries,avoidMoveUntilByLoc,rootSymDupLoc,rootSymmetries);
-    else
-      SymmetryHelpers::markDuplicateMoveLocs(rootBoard,rootHistory,NULL,avoidMoveUntilByLoc,rootSymDupLoc,rootSymmetries);
+    bool nextSymDupLoc[Board::MAX_ARR_SIZE];
+    vector<int> nextSymmetries;
+    SymmetryHelpers::markDuplicateMoveLocs(
+      rootBoard,rootHistory,rootPruneOnlySymmetries.empty() ? NULL : &rootPruneOnlySymmetries,
+      avoidMoveUntilByLoc,nextSymDupLoc,nextSymmetries
+    );
+    // Compare against the partition used by the retained tree, including hidden children.
+    // A different representative could otherwise delete a previously searched child below.
+    // Once distinct symmetric children can exist, do not turn pruning back on at this root.
+    if(rootRestrictionReuseActive &&
+       (rootSymmetries != nextSymmetries ||
+        !std::equal(rootSymDupLoc,rootSymDupLoc+Board::MAX_ARR_SIZE,nextSymDupLoc))) {
+      rootSymmetryPruningDisabledForReuse = true;
+    }
+    else {
+      std::copy(nextSymDupLoc,nextSymDupLoc+Board::MAX_ARR_SIZE,rootSymDupLoc);
+      rootSymmetries = std::move(nextSymmetries);
+    }
   }
-  else {
+  if(!rootSymmetryPruningEnabled()) {
     //Just in case, don't leave the values undefined.
     std::fill(rootSymDupLoc,rootSymDupLoc+Board::MAX_ARR_SIZE, false);
     rootSymmetries.clear();
