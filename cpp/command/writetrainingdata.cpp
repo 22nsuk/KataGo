@@ -1202,6 +1202,7 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       else if(sgfHandicapParsed == 1 && rules.komi != 0.0) {
         //Weird, let's filter this out.
         reportSgfDone(false,"GameHandicap1MismatchKomi");
+        return;
       }
       else {
         throw StringError(
@@ -2352,6 +2353,9 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       }
     }
 
+    // SGFs provide no searched Q targets. Keep an empty entry for each indexed turn.
+    const std::vector<QValueTargets> whiteQValueTargets(whiteValueTargets.size());
+
     for(size_t m = 0; m<policyTargets.size(); m++) {
       int turnIdx = (int)m;
       int64_t unreducedNumVisits = 0;
@@ -2380,7 +2384,6 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       const std::vector<ChangedNeuralNet*> changedNeuralNets;
       const bool hitTurnLimit = false;
       const int mode = 0;
-      const std::vector<QValueTargets> whiteQValueTargets;
 
       if(
         trainingWeights[m] > 1e-8

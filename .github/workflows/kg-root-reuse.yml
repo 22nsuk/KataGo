@@ -4,6 +4,7 @@ on:
     paths:
       - cpp/**
       - python/probe_kg_root_reuse.py
+      - python/test_fox_sgf_filter.py
       - .github/workflows/kg-root-reuse.yml
   workflow_dispatch:
 permissions:
@@ -27,6 +28,8 @@ jobs:
         run: |
           "$RUNNER_TEMP/kg-build/katago" runtests > "$RUNNER_TEMP/kg-runtests.log"
           "$RUNNER_TEMP/kg-build/katago" runoutputtests > "$RUNNER_TEMP/kg-runoutputtests.log"
+      - name: Check Fox SGF exclusion, output, and accounting
+        run: python3 python/test_fox_sgf_filter.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/fox-filter-proof"
       - name: Check both colors, threads, ownership, and root visit caps
         run: |
           for player in B W; do
@@ -41,6 +44,7 @@ jobs:
           name: root-reuse-proof
           path: |
             ${{ runner.temp }}/kg-proof/
+            ${{ runner.temp }}/fox-filter-proof/
             ${{ runner.temp }}/kg-runtests.log
             ${{ runner.temp }}/kg-runoutputtests.log
           retention-days: 7
