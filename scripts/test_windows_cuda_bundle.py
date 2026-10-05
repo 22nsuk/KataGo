@@ -1,6 +1,7 @@
 """Regression checks for immutable inputs, Windows dependency closure and ZIP provenance."""
 
 import copy
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -8,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 import build_windows_cuda_bundle as bundle
 import windows_cuda_sdk as sdk
@@ -32,6 +34,31 @@ class DependencyTests(unittest.TestCase):
             path.write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
                 sdk.verify_input(path, {"name": "test", "sizeBytes": 8, "sha256": "0" * 64})
+
+    def test_cached_download_is_revalidated_without_network(self):
+        data = b"cached locked archive"
+        item = {"name": "fixture", "url": "https://example.invalid/archive.zip",
+                "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        with tempfile.TemporaryDirectory() as temp:
+            cache = Path(temp)
+            archive = cache / (item["sha256"] + "-archive.zip")
+            archive.write_bytes(data)
+            with patch.object(sdk.subprocess, "run") as network:
+                self.assertEqual(sdk.download(item, cache, io.StringIO()), archive)
+                network.assert_not_called()
+
+    def test_corrupt_cache_hit_does_not_bypass_integrity(self):
+        data = b"cached locked archive"
+        item = {"name": "fixture", "url": "https://example.invalid/archive.zip",
+                "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        for changed in (b"x" * len(data), data + b"extra"):
+            with self.subTest(payload=changed), tempfile.TemporaryDirectory() as temp:
+                cache = Path(temp)
+                (cache / (item["sha256"] + "-archive.zip")).write_bytes(changed)
+                with patch.object(sdk.subprocess, "run") as network:
+                    with self.assertRaisesRegex(ValueError, "size or SHA-256 mismatch"):
+                        sdk.download(item, cache, io.StringIO())
+                    network.assert_not_called()
 
     def test_sdk_receipt_rejects_changed_or_extra_files(self):
         with tempfile.TemporaryDirectory() as temp:

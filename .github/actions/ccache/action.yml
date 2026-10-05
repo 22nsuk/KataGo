@@ -1,0 +1,28 @@
+name: C++ compiler cache
+description: Cache compiler outputs, never CMake paths, binaries or test results.
+inputs:
+  backend:
+    description: Distinct cache namespace for the configured backend.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Identify the installed toolchain
+      id: toolchain
+      shell: bash
+      run: |
+        { c++ --version; cmake --version; ccache --version; printf '%s\n' "${ImageOS-}:${ImageVersion-}"; } > "$RUNNER_TEMP/katago-toolchain.txt"
+        echo "identity=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$RUNNER_TEMP/katago-toolchain.txt")" >> "$GITHUB_OUTPUT"
+        echo "CCACHE_DIR=$RUNNER_TEMP/katago-ccache" >> "$GITHUB_ENV"
+        echo "CCACHE_MAXSIZE=256M" >> "$GITHUB_ENV"
+        echo "CCACHE_COMPILERCHECK=content" >> "$GITHUB_ENV"
+    - name: Restore compiler outputs
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ runner.temp }}/katago-ccache
+        key: ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.backend }}-${{ steps.toolchain.outputs.identity }}-${{ hashFiles('.github/actions/ccache/action.yml') }}-${{ github.sha }}
+        restore-keys: |
+          ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.backend }}-${{ steps.toolchain.outputs.identity }}-${{ hashFiles('.github/actions/ccache/action.yml') }}-
+    - name: Reset counters for this build
+      shell: bash
+      run: ccache --zero-stats

@@ -13,7 +13,7 @@
 # Trigger policy by tier:
 #   - fast EPs (prebuilt/nuget, a few minutes) run on PR + master push + manual dispatch,
 #     so the ONNX backend keeps a cheap always-on regression guard.
-#   - slow EPs (from-source ORT builds, 1-3h) run only on manual dispatch, so they never
+#   - slow EPs (from-source ORT builds, 1-3h) run only on manual dispatch with include_slow=true, so they never
 #     burn CI minutes on every PR/commit.
 # GitHub-hosted runners have no GPU, so from-source jobs only verify build and EP wiring.
 # Real GPU inference must be validated on a GPU machine.
@@ -38,10 +38,15 @@ on:
       - '.github/workflows/onnx-backend.yml'
       - '.github/actions/**'
   workflow_dispatch:
+    inputs:
+      include_slow:
+        description: Also build OpenVINO and TensorRT ONNX Runtime from source.
+        type: boolean
+        default: false
 
 concurrency:
-  group: onnx-backend-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -101,10 +106,11 @@ jobs:
         with:
           name: katago-${{ runner.os }}-onnx-${{ matrix.ep }}
           path: release/
+          retention-days: 14
 
   build-slow:
     # from-source ORT builds (1-3h) only on manual dispatch.
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.include_slow
     name: ${{ matrix.ep }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 300
@@ -151,6 +157,7 @@ jobs:
         with:
           name: katago-${{ runner.os }}-onnx-${{ matrix.ep }}
           path: release/
+          retention-days: 14
 
   build-tensorrt:
     # ORT from-source TensorRT build (1-2h), dispatch-only. Runs inside the official NGC
@@ -158,7 +165,7 @@ jobs:
     # combo ORT is built/tested against), so the CUDA/cuDNN/TensorRT SDKs are preinstalled
     # and no SDK install step is needed. github-hosted runners have no GPU, so this job
     # verifies build + EP wiring only; real GPU inference is validated on a GPU machine.
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.include_slow
     runs-on: ubuntu-latest
     timeout-minutes: 300
     container:
@@ -202,3 +209,4 @@ jobs:
         with:
           name: katago-Linux-onnx-tensorrt
           path: release/
+          retention-days: 14

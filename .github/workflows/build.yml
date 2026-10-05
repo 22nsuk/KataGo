@@ -7,40 +7,69 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.scope.outputs.native }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the CI policy test dependency
+        run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
+      - name: Check CI policy and cached input regressions
+        run: |
+          python3 -B -m unittest discover -s scripts -p 'test_ci_*.py' -v
+          python3 -B -m unittest discover -s scripts -p test_windows_cuda_bundle.py -v
+      - name: Select native build scope
+        id: scope
+        run: python3 -B scripts/ci_scope.py
+
   build-linux:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.native != 'false') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
 
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake build-essential zlib1g-dev libzip-dev opencl-headers ocl-icd-opencl-dev
+        sudo apt-get install -y cmake build-essential ccache zlib1g-dev libzip-dev opencl-headers ocl-icd-opencl-dev
 
-    - name: Cache CMake build
-      uses: actions/cache@v4
+    - name: Cache C++ compilation
+      uses: ./.github/actions/ccache
       with:
-        path: |
-          cpp/CMakeCache.txt
-          cpp/CMakeFiles
-        key: ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-cmake-
+        backend: opencl
 
     - name: Configure CMake
       working-directory: cpp
       run: |
-        cmake . -DUSE_BACKEND=OPENCL -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE="-s"
+        cmake . -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DUSE_BACKEND=OPENCL -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE="-s"
 
     - name: Build
       working-directory: cpp
       run: |
         make -j$(nproc)
+
+    - name: Report compiler cache statistics
+      run: ccache --show-stats
 
     - name: Run tests
       working-directory: cpp
@@ -53,6 +82,7 @@ jobs:
       with:
         name: katago-linux-opencl
         path: cpp/katago
+        retention-days: 14
 
   # Compile-only ROCm check: GitHub runners have no AMD GPU, but the ROCm backend builds
   # fine without one and runtests exercises no GPU code. Pinned to ROCm 6.4 (the documented
@@ -64,6 +94,8 @@ jobs:
   # only the built-in attention kernels. The newer ROCm versions that the Windows and TheRock
   # paths are developed against are not built here either. Nor is anything run on a GPU.
   build-linux-rocm:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.native != 'false') }}
     # Pinned rather than ubuntu-latest: the apt source line below is release-specific ("noble").
     runs-on: ubuntu-24.04
     permissions:
@@ -71,7 +103,9 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
 
     - name: Free disk space
       # The ROCm dev packages unpack to ~11 GB (mostly rocBLAS/MIOpen kernel libraries), so
@@ -122,6 +156,8 @@ jobs:
   # Windows or MSVC in general, and earlier TheRock versions do build the CK kernels here, so on a
   # version where the probe accepts them this job covers them too.
   build-windows-rocm:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.native != 'false') }}
     # windows-2022: KataGo's CMake requires a v143 MSVC toolset (14.3x/14.4x) for HIP clang
     # compatibility, which this image ships.
     runs-on: windows-2022
@@ -134,11 +170,13 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
 
     - name: Cache TheRock tarball
       id: cache-therock
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: C:\TheRock\therock-dist.tar.gz
         key: therock-windows-${{ env.THEROCK_FAMILY }}-${{ env.THEROCK_VERSION }}
@@ -188,49 +226,38 @@ jobs:
         .\katago.exe runtests
 
   build-macos:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.native != 'false') }}
     runs-on: macos-latest
     permissions:
       contents: read
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - name: Install dependencies
         run: |
-          brew install zlib libzip opencl-headers
+          brew install ninja ccache zlib libzip opencl-headers
 
-      # CMake resolves find_package(ZLIB) to the SDK's libz.tbd and bakes its
-      # absolute path (e.g. .../Xcode_16.4.app/.../MacOSX.sdk/usr/lib/libz.tbd)
-      # into the cached build.ninja/CMakeCache.txt. When GitHub bumps the
-      # runner's default Xcode that path disappears and the cached ninja build
-      # fails. Fold the Xcode version into the cache key so a bump forces a
-      # fresh configure.
-      - name: Capture toolchain version for cache key
-        id: xcode-version
-        run: |
-          echo "xcode=$(xcodebuild -version | tr '\n' '-')" >> "$GITHUB_OUTPUT"
-
-      - name: Cache CMake build
-        uses: actions/cache@v4
+      - name: Cache C++ compilation
+        uses: ./.github/actions/ccache
         with:
-          path: |
-            cpp/CMakeCache.txt
-            cpp/CMakeFiles
-            cpp/build.ninja
-            cpp/.ninja_deps
-            cpp/.ninja_log
-          key: ${{ runner.os }}-cmake-${{ steps.xcode-version.outputs.xcode }}-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-cmake-${{ steps.xcode-version.outputs.xcode }}-
+          backend: opencl
+
       - name: Configure CMake
         working-directory: cpp
         run: |
-          cmake . -G Ninja -DUSE_BACKEND=OPENCL -DCMAKE_BUILD_TYPE=Release
+          cmake . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DUSE_BACKEND=OPENCL -DCMAKE_BUILD_TYPE=Release
       - name: Build
         working-directory: cpp
         run: |
           ninja
+      - name: Report compiler cache statistics
+        run: ccache --show-stats
+
       - name: Run tests
         working-directory: cpp
         run: |
@@ -241,56 +268,42 @@ jobs:
         with:
           name: katago-macos-opencl
           path: cpp/katago
+          retention-days: 14
 
   build-macos-metal:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.native != 'false') }}
     runs-on: macos-latest
     permissions:
       contents: read
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - name: Install dependencies
         run: |
-          brew install ninja zlib libzip protobuf abseil
+          brew install ninja ccache zlib libzip protobuf abseil
 
-      # The CMake build (build.ninja, CMakeCache.txt) bakes in version-pinned
-      # Homebrew Cellar paths for protobuf/abseil (e.g.
-      # -L/opt/homebrew/Cellar/protobuf/34.1/lib). When Homebrew bumps those
-      # the cached paths go stale and the link fails.
-      # Capture the installed versions into the cache key so
-      # a formula bump invalidates the cache and forces a fresh configure.
-      # Also fold in the Xcode version: CMake bakes the SDK's absolute
-      # libz.tbd path into the cached build, so an Xcode bump on the runner
-      # leaves a stale path and breaks the cached ninja build.
-      - name: Capture dependency versions for cache key
-        id: dep-versions
-        run: |
-          echo "versions=$(brew list --versions protobuf abseil | tr '\n' '-')$(xcodebuild -version | tr '\n' '-')" >> "$GITHUB_OUTPUT"
-
-      - name: Cache CMake build
-        uses: actions/cache@v4
+      - name: Cache C++ compilation
+        uses: ./.github/actions/ccache
         with:
-          path: |
-            cpp/CMakeCache.txt
-            cpp/CMakeFiles
-            cpp/build.ninja
-            cpp/.ninja_deps
-            cpp/.ninja_log
-          key: ${{ runner.os }}-cmake-metal-${{ steps.dep-versions.outputs.versions }}-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-cmake-metal-${{ steps.dep-versions.outputs.versions }}-
+          backend: metal
 
       - name: Configure CMake
         working-directory: cpp
         run: |
-          cmake . -G Ninja -DUSE_BACKEND=METAL -DCMAKE_BUILD_TYPE=Release
+          cmake . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DUSE_BACKEND=METAL -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         working-directory: cpp
         run: |
           ninja
+
+      - name: Report compiler cache statistics
+        run: ccache --show-stats
 
       - name: Run tests
         working-directory: cpp
@@ -303,28 +316,40 @@ jobs:
         with:
           name: katago-macos-metal
           path: cpp/katago
+          retention-days: 14
 
   build-windows:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.native != 'false') }}
     runs-on: windows-latest
     permissions:
       contents: read
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
 
     - name: Setup MSVC
       uses: microsoft/setup-msbuild@v2
 
-    - name: Cache vcpkg packages
-      uses: actions/cache@v4
+    - name: Identify vcpkg binary cache
+      id: vcpkg-cache
+      run: |
+        $revision = git -C "$env:VCPKG_INSTALLATION_ROOT" rev-parse HEAD
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot identify vcpkg revision' }
+        "revision=$revision" >> $env:GITHUB_OUTPUT
+        "image=$env:ImageVersion" >> $env:GITHUB_OUTPUT
+        $cachePath = Join-Path $env:RUNNER_TEMP 'vcpkg-binary-cache'
+        New-Item -ItemType Directory -Force -Path $cachePath | Out-Null
+        "VCPKG_BINARY_SOURCES=clear;files,$cachePath,readwrite" >> $env:GITHUB_ENV
+
+    - name: Cache vcpkg binary archives
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        path: |
-          ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
-          ${{ env.VCPKG_INSTALLATION_ROOT }}/packages
-        key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}-opencl
-        restore-keys: |
-          ${{ runner.os }}-vcpkg-
+        path: ${{ runner.temp }}/vcpkg-binary-cache
+        key: vcpkg-binary-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-cache.outputs.image }}-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-${{ hashFiles('.github/workflows/build.yml') }}
 
     - name: Install vcpkg dependencies
       run: |
@@ -359,3 +384,4 @@ jobs:
       with:
         name: katago-windows-opencl
         path: cpp/Release/
+        retention-days: 14
