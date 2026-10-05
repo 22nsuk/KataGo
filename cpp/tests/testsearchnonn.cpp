@@ -172,6 +172,68 @@ static void runRootReuseInvariantTests(const string& modelFile, Logger& logger) 
       testAssert(search.rootSymmetryPruningEnabled());
     }
   }
+  // Equivalent first-ply masks must preserve a frozen root even before any reuse
+  // transition has occurred. Exercise tree search and graph search with its eval cache.
+  for(Player pla: {P_BLACK,P_WHITE}) {
+    for(bool useGraphSearch: {false,true}) {
+      for(int numThreads: {1,4}) {
+        SearchParams params;
+        params.maxVisits = 80;
+        params.numThreads = numThreads;
+        params.useGraphSearch = useGraphSearch;
+        params.useEvalCache = useGraphSearch;
+        params.rootSymmetryPruning = true;
+        params.visitCapContempt = 32;
+        params.visitCapContemptPla = pla;
+        Search search(params,nnEval,&logger,"root-reuse-equivalent-cap");
+        BoardHistory hist(board,pla,Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+        search.setPosition(pla,board,hist);
+        search.runWholeSearch(pla);
+        testAssert(!search.rootRestrictionReuseActive);
+        SearchNode* root = search.rootNode;
+        const VisitCapSnapshot* snapshot = root->visitCapSnapshot.load();
+        testAssert(snapshot != NULL);
+        const int64_t visits = search.getRootVisits();
+        vector<int> zero(Board::MAX_ARR_SIZE,0);
+        vector<int> inactive = zero;
+        inactive[Location::ofString("D4",board)] = 1;
+        auto setMask = [&](const vector<int>& active, const vector<int>& other, bool reuse) {
+          search.setAvoidMoveUntilByLoc(pla == P_BLACK ? active : other,
+                                       pla == P_WHITE ? active : other,reuse);
+        };
+        auto checkEquivalent = [&](const vector<int>& active, const vector<int>& other) {
+          setMask(active,other,true);
+          // Check before beginSearch as well: recreating an equivalent snapshot is not preservation.
+          testAssert(search.rootNode == root);
+          testAssert(root->visitCapSnapshot.load() == snapshot);
+          testAssert(search.rootVisitCapStartVisits == 0);
+          testAssert(!search.rootRestrictionReuseActive);
+          testAssert(search.avoidMoveUntilByLocBlack == (pla == P_BLACK ? active : other));
+          testAssert(search.avoidMoveUntilByLocWhite == (pla == P_WHITE ? active : other));
+          search.runWholeSearch(pla);
+          testAssert(search.getRootVisits() == visits); // maxVisits is still exhausted.
+          testAssert(root->visitCapSnapshot.load() == snapshot);
+          testAssert(search.rootSymmetryPruningEnabled());
+          testAssert(search.rootSymmetries.size() == 8);
+        };
+        checkEquivalent(zero,{});
+        checkEquivalent({},inactive);
+        checkEquivalent(zero,zero);
+        checkEquivalent({},{});
+        // Default/legacy callers still clear when arrays change, even for equivalent support.
+        setMask(zero,{},false);
+        testAssert(search.rootNode == NULL);
+        search.runWholeSearch(pla);
+        // An inactive-color depth > 1 is not a no-op: it constrains a descendant.
+        inactive[Location::ofString("D4",board)] = 2;
+        setMask(zero,inactive,true);
+        testAssert(search.rootNode == NULL);
+        search.runWholeSearch(pla);
+        setMask(zero,{},true);
+        testAssert(search.rootNode == NULL);
+      }
+    }
+  }
   for(Player pla: {P_BLACK,P_WHITE}) {
     SearchParams params;
     params.maxVisits = 64;
@@ -210,8 +272,18 @@ static void runRootReuseInvariantTests(const string& modelFile, Logger& logger) 
     policy[search.getPos(oldMove)] = 0.01f;
     policy[search.getPos(newMove)] = 0.99f;
     for(int i = 0; i<32; i++) {
-      if(i == 16)
-        setMask(); // Repeating the same restriction must not restart the cap interval.
+      if(i == 8 || i == 16) {
+        // No-op updates must not postpone an in-progress interval either. The second
+        // update removes the other player's mask while the active mask stays identical.
+        vector<int> inactive(Board::MAX_ARR_SIZE,0);
+        if(i == 8)
+          inactive[oldMove] = 1;
+        search.setAvoidMoveUntilByLoc(pla == P_BLACK ? mask : inactive,
+                                     pla == P_WHITE ? mask : inactive,true);
+        testAssert(search.rootVisitCapStartVisits == retainedVisits);
+      }
+      if(i == 24)
+        setMask(); // All-zero and empty inactive masks are also equivalent.
       SearchThread thread(0,search);
       testAssert(search.runSinglePlayout(thread,1e30));
       if(i < 31)
@@ -229,6 +301,14 @@ static void runRootReuseInvariantTests(const string& modelFile, Logger& logger) 
     search.runWholeSearch(pla);
     testAssert(search.getRootVisits() == retainedVisits + 48);
     testAssert(retainedRoot->visitCapSnapshot.load() == snapshot);
+    // A no-op after reformation preserves both the frozen snapshot and the epoch.
+    vector<int> inactive(Board::MAX_ARR_SIZE,0);
+    inactive[newMove] = 1;
+    search.setAvoidMoveUntilByLoc(pla == P_BLACK ? mask : inactive,
+                                 pla == P_WHITE ? mask : inactive,true);
+    testAssert(retainedRoot->visitCapSnapshot.load() == snapshot);
+    testAssert(search.rootVisitCapStartVisits == retainedVisits);
+    testAssert(search.rootRestrictionReuseActive);
     testAssert(search.makeMove(oldMove,pla));
     testAssert(search.rootVisitCapStartVisits == 0);
     testAssert(!search.rootRestrictionReuseActive);

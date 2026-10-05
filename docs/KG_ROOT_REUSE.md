@@ -38,8 +38,12 @@ unchanged by a first-ply mask. For a visit-capped root, changing the mask discar
 snapshot and gives normal selection another `visitCapContempt` counted visits before freezing
 the distribution again. Previously unallocated moves are eligible during this interval;
 as in a fresh capped search, a small cap does not guarantee every legal move a visit.
-Repeated requests with the same restriction do not restart the interval, and focus
-visits do not consume it. Snapshots below root remain valid. Masked child weight is
+Only a change to the current root player's first-ply mask restarts this interval.
+Repeated requests, changes confined to the other player's first-ply mask, and
+empty/all-zero encodings preserve both an in-progress interval and an already frozen
+snapshot. Both players' requested arrays are still stored. This equivalence does not
+relax deeper-restriction invalidation or the default legacy clearing behavior.
+Focus visits do not consume the interval. Snapshots below root remain valid. Masked child weight is
 excluded from the capped root's deficit calculation.
 
 When a mask transition retains the tree, symmetry pruning stays enabled only if the
@@ -96,7 +100,15 @@ python3 python/probe_kg_root_reuse.py --engine build-eigen/katago \
 ```
 
 Eigen3, zlib, and optionally libzip headers/libraries are needed. The probe uses a
-real GTP process and saves `result.json`, `gtp.log`, and `stderr.log`. It checks the
+real GTP process. `--output` must be a new directory; an existing directory is rejected
+without overwriting it, so a failed rerun cannot inherit an old PASS. The probe saves
+`gtp.cfg`, `gtp.log`, and `stderr.log`. It writes `result.json` with PASS only after all
+checks, acknowledged `quit`, zero process exit, reader shutdown, and log writes succeed.
+Failed runs do not have a new PASS result. The result records the engine, model, and
+configuration SHA-256 hashes along with the engine version and test options; these
+identify the tested inputs but are not a GPU performance or strength certification.
+The final report drained by the stop barrier is checked for masked moves and visit
+continuity as well as the earlier streamed reports. The probe checks the
 capability, allow/avoid/clear transitions, per-color masks, retained visits, reallowed
 children, mixed retained/new candidates, first-request symmetry pruning, low-policy
 moves, pass, excluded focus targets, deeper restriction invalidation, default legacy
@@ -105,10 +117,24 @@ search limits. Native NN-less search tests additionally verify cap reformation a
 fresh counted visits, unchanged-mask restarts, per-request playout budgets, the allowed
 9:1 distribution with a hidden 10000-visit child, and Japanese dame-filling pass selection. The CI
 workflow tests both colors with one and four threads and additional capped searches.
+Equivalent-mask cap regressions cover both colors, one/four threads, tree search,
+graph search with eval cache, preserved snapshots, in-progress cap intervals, and
+legacy/deeper invalidation. GTP checks exercise empty-list and inactive-color requests
+as well as komi, rule, and player invalidation of a warmed tree.
 Symmetry regressions cover pass-only and inactive-color restrictions, excluding a
 nonrepresentative, equivalent empty/all-zero masks, retained children and visits,
 representative changes, sticky pruning disablement, and resets on clearing or playing
 a move. Real-process checks also verify that unchanged representatives keep their
 shared analysis rows and that excluded moves never appear in those rows.
+
+Probe lifecycle and final-report failure handling have a separate standard-library
+test suite, run by the same CI before building the engine:
+
+```sh
+python3 -m unittest discover -s python -p test_probe_kg_root_reuse.py -v
+```
+
+Those tests inject protocol/cleanup failures; they do not replace the native engine
+or real-process regression matrix above.
 
 Windows CUDA build instructions are in [KG_CUDA13_WINDOWS.md](KG_CUDA13_WINDOWS.md).
