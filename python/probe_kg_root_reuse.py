@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import hashlib
 import json
 import math
@@ -13,13 +14,24 @@ import subprocess
 import tempfile
 import threading
 import time
+from typing import TextIO
 
+
+# Assertions are part of this verifier's acceptance contract, including when imported.
+if not __debug__:
+    raise RuntimeError('Run the probe without -O, -OO, or PYTHONOPTIMIZE; its checks require assertions.')
 
 VISIT_BUDGET = 64
+MAX_QUEUED_LINES = 16
+MAX_LINE_CHARS = 1024 * 1024  # Ample room for full 9x9 move ownership reports.
+MAX_RESPONSE_CHARS = 4 * MAX_LINE_CHARS
+STDERR_TAIL_LINES = 20
+STDERR_TAIL_CHARS = 2000
 
 
 class Probe:
-    def __init__(self, executable: Path, model: Path, config: Path, player: str, ownership: bool):
+    def __init__(self, executable: Path, model: Path, config: Path, player: str, ownership: bool,
+                 *, transcript: TextIO, stderr_log: TextIO):
         self.player = player
         self.ownership = ownership
         self.process = subprocess.Popen(
@@ -27,9 +39,15 @@ class Probe:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding='utf-8', bufsize=1,
         )
-        self.lines: queue.Queue[str | None] = queue.Queue()
-        self.stderr: list[str] = []
-        self.transcript: list[str] = []
+        self.lines: queue.Queue[str | None] = queue.Queue(maxsize=MAX_QUEUED_LINES)
+        self.stop_queuing = threading.Event()
+        self.stderr: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
+        self.stderr_lock = threading.Lock()
+        self.transcript = transcript
+        self.transcript_lock = threading.Lock()
+        self.stderr_log = stderr_log
+        self.stdout_error: Exception | None = None
+        self.stderr_error: Exception | None = None
         self.serial = 0
         self.last: dict | None = None
         self.reader = threading.Thread(target=self.read_stdout, daemon=True)
@@ -37,25 +55,75 @@ class Probe:
         self.reader.start()
         self.err_reader.start()
 
+    def log(self, line: str) -> None:
+        # Commands and received stdout share one ordered transcript, not a growing list.
+        with self.transcript_lock:
+            self.transcript.write(line + '\n')
+
+    def stderr_tail(self) -> str:
+        with self.stderr_lock:
+            return '\n'.join(self.stderr)
+
+    def check_readers(self) -> None:
+        for name, error in (('stdout', self.stdout_error), ('stderr', self.stderr_error)):
+            if error is not None:
+                raise AssertionError(f'KataGo {name} capture failed: {error}') from error
+
+    def enqueue(self, line: str | None) -> None:
+        # Backpressure never drops reports during verification. After quit/failure, keep
+        # draining and logging stdout without waiting for a consumer that has stopped.
+        while not self.stop_queuing.is_set():
+            try:
+                self.lines.put(line, timeout=0.1)
+                return
+            except queue.Full:
+                continue
+
+    @staticmethod
+    def pipe_lines(stream: TextIO):
+        while True:
+            line = stream.readline(MAX_LINE_CHARS + 1)
+            if not line:
+                return
+            if len(line) > MAX_LINE_CHARS:
+                raise ValueError(f'Output line exceeds {MAX_LINE_CHARS} characters')
+            yield line.rstrip('\n')
+
     def read_stdout(self):
         assert self.process.stdout is not None
-        for line in self.process.stdout:
-            self.lines.put(line.rstrip('\n'))
-        self.lines.put(None)
+        try:
+            for line in self.pipe_lines(self.process.stdout):
+                self.log('< ' + line)
+                self.enqueue(line)
+        except (OSError, UnicodeError, ValueError) as error:
+            self.stdout_error = error
+        finally:
+            self.enqueue(None)
 
     def read_stderr(self):
         assert self.process.stderr is not None
-        for line in self.process.stderr:
-            self.stderr.append(line.rstrip('\n'))
+        try:
+            for line in self.pipe_lines(self.process.stderr):
+                with self.stderr_lock:
+                    self.stderr.append(line[-STDERR_TAIL_CHARS:])
+                self.stderr_log.write(line + '\n')
+        except (OSError, UnicodeError, ValueError) as error:
+            self.stderr_error = error
 
     def line(self, deadline: float) -> str:
-        try:
-            line = self.lines.get(timeout=max(0.01, deadline - time.monotonic()))
-        except queue.Empty as error:
-            raise AssertionError('KataGo response timed out\n' + '\n'.join(self.stderr[-20:])) from error
+        while True:
+            self.check_readers()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError('KataGo response timed out\n' + self.stderr_tail())
+            try:
+                line = self.lines.get(timeout=min(0.1, remaining))
+                break
+            except queue.Empty:
+                continue
+        self.check_readers()
         if line is None:
-            raise AssertionError('KataGo exited\n' + '\n'.join(self.stderr[-20:]))
-        self.transcript.append('< ' + line)
+            raise AssertionError('KataGo exited\n' + self.stderr_tail())
         if line.startswith('info '):
             sections = re.split(r'\brootInfo\s+', line, maxsplit=1)
             root = re.search(r'\bvisits\s+(\d+)', sections[1]) if len(sections) == 2 else None
@@ -103,15 +171,25 @@ class Probe:
     def command(self, text: str, timeout: float = 90) -> str:
         self.serial += 1
         serial = self.serial
-        self.transcript.append(f'> {serial} {text}')
+        self.check_readers()
+        self.log(f'> {serial} {text}')
         assert self.process.stdin is not None
         self.process.stdin.write(f'{serial} {text}\n')
         self.process.stdin.flush()
         deadline = time.monotonic() + timeout
         response = []
+        response_chars = 0
         started = False
         while time.monotonic() < deadline:
             line = self.line(deadline)
+            # Analysis reports have already been parsed and logged by line()/the reader.
+            # Do not duplicate them in a command response, especially for slow bounded searches.
+            if line.startswith('info '):
+                continue
+            if started or line.startswith(f'={serial}'):
+                response_chars += len(line)
+                if response_chars > MAX_RESPONSE_CHARS:
+                    raise AssertionError('GTP response exceeds capture limit')
             if line.startswith(f'?{serial}'):
                 raise AssertionError(f'{text}: {line}')
             if line.startswith(f'={serial}'):
@@ -187,15 +265,18 @@ class Probe:
         if clean_exit:
             try:
                 self.command('quit', timeout=5)
-            except (AssertionError, OSError):
+            except (AssertionError, OSError, ValueError):
                 clean_exit = False
                 self.process.terminate()
+            finally:
+                self.stop_queuing.set()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 clean_exit = False
                 self.process.kill()
                 self.process.wait(timeout=5)
+        self.stop_queuing.set()
         self.reader.join(timeout=5)
         self.err_reader.join(timeout=5)
         readers_stopped = not self.reader.is_alive() and not self.err_reader.is_alive()
@@ -203,6 +284,10 @@ class Probe:
             for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
                 if stream is not None:
                     stream.close()
+            # Surface buffered disk errors too; a reader returning normally is not enough.
+            self.transcript.flush()
+            self.stderr_log.flush()
+        self.check_readers()
         return clean_exit and self.process.returncode == 0 and readers_stopped
 
 
@@ -218,7 +303,9 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
         ownership: bool = False, root_visit_cap: int = 0):
     # Never let a failed rerun inherit a previous PASS or mix logs from different runs.
     output.mkdir(parents=True, exist_ok=False)
-    with tempfile.TemporaryDirectory(prefix='kg-root-reuse-') as directory:
+    with (tempfile.TemporaryDirectory(prefix='kg-root-reuse-') as directory,
+          (output / 'gtp.log').open('x', encoding='utf-8', newline='\n') as transcript,
+          (output / 'stderr.log').open('x', encoding='utf-8', newline='\n') as stderr_log):
         config = Path(directory) / 'gtp.cfg'
         config.write_text(
             f'rules = chinese\nnumSearchThreads = {threads}\nmaxPlayouts = {VISIT_BUDGET}\n'
@@ -230,7 +317,8 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
         (output / 'gtp.cfg').write_bytes(config.read_bytes())
         identity = {'engineSha256': file_sha256(executable), 'modelSha256': file_sha256(model),
                     'configSha256': file_sha256(config)}
-        probe = Probe(executable, model, config, player, ownership)
+        probe = Probe(executable, model, config, player, ownership,
+                      transcript=transcript, stderr_log=stderr_log)
         results = []
         try:
             assert probe.command('known_command kg-reuse-root-tree').strip() == 'true'
@@ -418,18 +506,14 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
                 results.append({**equivalent, 'equivalentRootMask': True})
                 unchanged = equivalent
         finally:
-            try:
-                clean_exit = probe.close()
-            finally:
-                (output / 'gtp.log').write_text('\n'.join(probe.transcript) + '\n', encoding='utf-8')
-                (output / 'stderr.log').write_text('\n'.join(probe.stderr) + '\n', encoding='utf-8')
+            clean_exit = probe.close()
         assert clean_exit, f'KataGo did not exit cleanly: {probe.process.returncode}'
-        # Success includes acknowledged shutdown and saved logs, not only search checks.
-        (output / 'result.json').write_text(json.dumps(
-            {'status': 'PASS', 'version': version, 'model': model.name, 'player': player,
-             'threads': threads, 'ownership': ownership, 'rootVisitCap': root_visit_cap,
-             **identity, 'engineReturnCode': probe.process.returncode, 'cases': results},
-            ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    # Publish only after acknowledged shutdown, reader joins, and successful log closes.
+    (output / 'result.json').write_text(json.dumps(
+        {'status': 'PASS', 'version': version, 'model': model.name, 'player': player,
+         'threads': threads, 'ownership': ownership, 'rootVisitCap': root_visit_cap,
+         **identity, 'engineReturnCode': probe.process.returncode, 'cases': results},
+        ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
 def main():
