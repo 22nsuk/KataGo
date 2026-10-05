@@ -35,19 +35,32 @@ def sgf(handicap: str | None, komi: str, rules: str, *, app: bool = True,
     )
 
 
+def npy_header(data) -> dict:
+    assert data.read(6) == b"\x93NUMPY", "Invalid NPY magic"
+    version = tuple(data.read(2))
+    assert version in ((1, 0), (2, 0)), version
+    size_format = "<H" if version == (1, 0) else "<I"
+    length = struct.unpack(size_format, data.read(struct.calcsize(size_format)))[0]
+    assert length <= 65536, "Unexpectedly large test-output header"
+    return ast.literal_eval(data.read(length).decode("latin1"))
+
+
 def npz_rows(path: Path) -> int:
-    # Read the row dimension without adding numpy as a dependency of this test.
+    # Check row count and absent search-Q targets without a numpy dependency.
     with zipfile.ZipFile(path) as archive:
         with archive.open("globalInputNC.npy") as data:
-            assert data.read(6) == b"\x93NUMPY", path
-            version = tuple(data.read(2))
-            assert version in ((1, 0), (2, 0)), (path, version)
-            size_format = "<H" if version == (1, 0) else "<I"
-            length = struct.unpack(size_format, data.read(struct.calcsize(size_format)))[0]
-            header = ast.literal_eval(data.read(length).decode("latin1"))
-            shape = header["shape"]
+            shape = npy_header(data)["shape"]
             assert len(shape) == 2 and shape[0] > 0, (path, shape)
-            return shape[0]
+            rows = shape[0]
+        with archive.open("qValueTargetsNCMove.npy") as data:
+            header = npy_header(data)
+            assert header["shape"] == (rows, 3, 82), (path, header)
+            assert header["descr"] == "<i2", (path, header)
+            expected_bytes = rows * 3 * 82 * 2
+            assert data.read(expected_bytes + 1) == bytes(expected_bytes), (
+                path, "Human SGFs must not fabricate Q values or Q visits"
+            )
+        return rows
 
 
 def done_counts(log: str) -> dict[str, int]:
@@ -79,7 +92,7 @@ def run_case(engine: Path, model: Path, root: Path, name: str, source: str,
     config.write_text(
         "dataBoardLen = 9\nallowedBoardSizes = 9-9\n"
         "maxApproxRowsPerTrainFile = 32\n"
-        "nnMaxBatchSize = 8\nnumEigenThreads = 1\n"
+        "nnMaxBatchSize = 8\n"
         "nnCacheSizePowerOfTwo = 10\n",
         encoding="utf-8",
     )
