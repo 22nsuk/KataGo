@@ -51,7 +51,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake build-essential ccache zlib1g-dev libzip-dev opencl-headers ocl-icd-opencl-dev
+        sudo apt-get install -y cmake build-essential binutils ccache zlib1g-dev libzip-dev opencl-headers ocl-icd-opencl-dev
 
     - name: Cache C++ compilation
       uses: ./.github/actions/ccache
@@ -61,7 +61,7 @@ jobs:
     - name: Configure CMake
       working-directory: cpp
       run: |
-        cmake . -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DUSE_BACKEND=OPENCL -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE="-s"
+        cmake . -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DUSE_BACKEND=OPENCL -DCMAKE_BUILD_TYPE=Release
 
     - name: Build
       working-directory: cpp
@@ -76,12 +76,33 @@ jobs:
       run: |
         ./katago runtests
 
+    # Strip only a release copy; retain the linked binary for diagnosis in this job.
+    # Run on PRs too, so artifact preparation is tested before a master push.
+    - name: Prepare and verify stripped Linux release
+      working-directory: cpp
+      run: |
+        release="$RUNNER_TEMP/katago-linux-opencl"
+        mkdir -p "$release"
+        cp ./katago "$release/katago"
+        strip --strip-unneeded "$release/katago"
+        readelf --sections --wide "$release/katago" > "$RUNNER_TEMP/katago-linux-sections.txt"
+        if grep -qE '[[:space:]]\.symtab[[:space:]]' "$RUNNER_TEMP/katago-linux-sections.txt"; then
+          echo 'Release executable still contains .symtab' >&2
+          exit 1
+        fi
+        ./katago version > "$RUNNER_TEMP/katago-linked-version.txt"
+        "$release/katago" version > "$RUNNER_TEMP/katago-release-version.txt"
+        cmp "$RUNNER_TEMP/katago-linked-version.txt" "$RUNNER_TEMP/katago-release-version.txt"
+        "$release/katago" runtests
+        stat -c '%n %s bytes' ./katago "$release/katago"
+
     - name: Upload artifact
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: actions/upload-artifact@v4
       with:
         name: katago-linux-opencl
-        path: cpp/katago
+        path: ${{ runner.temp }}/katago-linux-opencl/katago
+        if-no-files-found: error
         retention-days: 14
 
   # Compile-only ROCm check: GitHub runners have no AMD GPU, but the ROCm backend builds

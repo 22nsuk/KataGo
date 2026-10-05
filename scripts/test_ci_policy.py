@@ -83,6 +83,21 @@ class PolicyTests(unittest.TestCase):
         self.assertIn('--source-sha $env:SOURCE_SHA', builder['run'])
         self.assertIn('--cache "$env:RUNNER_TEMP/cuda-downloads"', builder['run'])
 
+    def test_linux_release_copy_is_stripped_and_tested_before_upload(self):
+        steps = load('.github/workflows/build.yml')['jobs']['build-linux']['steps']
+        configure = next(s for s in steps if s.get('name') == 'Configure CMake')
+        self.assertNotIn('CMAKE_CXX_FLAGS_RELEASE', configure['run'])
+        prepare = next(s for s in steps if s.get('name') == 'Prepare and verify stripped Linux release')
+        self.assertNotIn('if', prepare)
+        self.assertEqual(prepare['working-directory'], 'cpp')
+        for command in ('cp ./katago "$release/katago"', 'strip --strip-unneeded "$release/katago"',
+                        'readelf --sections --wide', 'cmp ', '"$release/katago" runtests'):
+            self.assertIn(command, prepare['run'])
+        upload = next(s for s in steps if s.get('name') == 'Upload artifact')
+        self.assertEqual(upload['with']['path'], '${{ runner.temp }}/katago-linux-opencl/katago')
+        self.assertEqual(upload['with']['if-no-files-found'], 'error')
+        self.assertLess(steps.index(prepare), steps.index(upload))
+
     def test_vcpkg_uses_binary_archives_not_installed_tree(self):
         job = load('.github/workflows/build.yml')['jobs']['build-windows']
         steps = job['steps']
