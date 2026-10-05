@@ -99,3 +99,11 @@ These checks reject modified dependencies, unsafe/colliding archive paths,
 missing DLL imports, dynamic zlib/MSVC imports, mismatched source identities,
 incomplete file inventories, and modified ZIP members. They also cover both
 official runtime layouts and deterministic ZIP construction for fixed inputs.
+
+## CI cache policy
+
+CI caches only the original hash-locked downloads, keyed by target profile and
+that profile's lock-file hash. A cache hit does not skip input verification,
+SDK assembly, builds, native tests, PE inspection, or ZIP verification.
+For cache scope, manual warmup, cancellation and retention, see
+[the fork CI guide](KG_CI.md). The cache is not a release or GPU approval record.

@@ -1,5 +1,37 @@
 # KataGo
 
+<!-- KG-NEXT FORK ENTRY -->
+## KG-next용 포크 안내
+
+이 저장소는 [lightvector/KataGo](https://github.com/lightvector/KataGo)의 포크이며,
+[KG-next](https://github.com/22nsuk/KG-next)에서 사용하는 **루트 탐색 재사용 확장**과
+**소스 커밋에 연결된 Windows CUDA 빌드·검증**을 관리합니다. 업스트림 공식 배포와
+이 포크의 배포를 구분해 사용하세요. 아래 업스트림 설명은 원래 내용과 링크를 유지합니다.
+
+| 하려는 작업 | 먼저 볼 문서 |
+| --- | --- |
+| KG-next에서 엔진 사용·설치 | [KG-next 안내](https://github.com/22nsuk/KG-next) · [포크 릴리스](https://github.com/22nsuk/KataGo/releases) |
+| 허용/제외 수를 바꾸면서 탐색 재사용 | [GTP 협상·재사용 범위·탐색 한도·회귀 검증](docs/KG_ROOT_REUSE.md) |
+| CUDA 12·13 패키지를 직접 빌드·검사 | [잠금 파일·프로필·배포 ZIP 계약](docs/KG_WINDOWS_CUDA_BUNDLES.md) |
+| CUDA 13 Windows 실기 검증 | [런타임 준비와 GPU 승인 절차](docs/KG_CUDA13_WINDOWS.md) |
+| CI 실행 범위·캐시·검증 증거 관리 | [포크 CI와 캐시 운영](docs/KG_CI.md) |
+| 일반 빌드·업스트림 기능 사용 | [컴파일 안내](Compiling.md) · [업스트림 개요](#overview) |
+
+**설치 전에 확인할 점:** 포크의 `katago-source-<커밋>-windows-nvidia*.zip`은
+KG-next가 별도로 고정된 NVIDIA 런타임을 설치하는 계약에 따른 작은 ZIP입니다.
+NVIDIA DLL과 신경망 모델을 모두 포함한 독립 실행 패키지가 아닙니다.
+CUDA 12와 CUDA 13 프로필을 섞지 말고, 정확한 버전·파일 해시는
+[잠금 파일과 번들 문서](docs/KG_WINDOWS_CUDA_BUNDLES.md)를 기준으로 확인하세요.
+
+**검증 상태의 의미:** CI 빌드·CPU 테스트·PE 의존성 검사의 성공은 GPU 추론 성공을
+뜻하지 않습니다. `hardwareAcceptanceStatus: PENDING_HARDWARE`인 패키지는 아직 별도의
+GPU 검증이 필요합니다. 릴리스 발행과 KG-next 카탈로그 반영도 독립적인 승인 단계입니다.
+루트 재사용은 엔진 capability 확인 후 `reuseRootTree true`로 요청할 때만 적용합니다.
+
+<!-- END KG-NEXT FORK ENTRY -->
+
+---
+
 - [KataGo](#katago)
   - [Overview](#overview)
   - [Training History and Research and Docs](#training-history-and-research-and-docs)
