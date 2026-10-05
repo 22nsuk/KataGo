@@ -300,6 +300,28 @@ sys.stdin.read()
                     with self.assertRaisesRegex(OSError, 'injected flush failure'):
                         probe.close()
 
+    def test_analysis_reports_do_not_accumulate_in_command_response(self):
+        # More than the response text limit is valid for a slow bounded search.
+        # These reports must be parsed and logged, not appended to the return string.
+        body = '''
+import sys
+for request in sys.stdin:
+    serial, command = request.strip().split(' ', 1)
+    if command == 'quit':
+        print('=' + serial + '\\n', flush=True)
+        break
+    print('=' + serial + ' ready', flush=True)
+    for i in range(200):
+        print('info move D4 visits ' + str(i) + ' rootInfo visits ' + str(i) + ' padding ' + 'x' * 32768)
+    print('', flush=True)
+'''
+        with self.producer(body) as (probe, root):
+            self.assertEqual(probe.command('kata-search_analyze B', timeout=10), 'ready')
+            self.assertEqual(probe.last['visits'], 199)
+            self.assertTrue(probe.close())
+            with (root / 'gtp.log').open() as stream:
+                self.assertEqual(sum(line.startswith('< info ') for line in stream), 200)
+
     def test_unterminated_multiline_response_has_a_memory_limit(self):
         body = '''
 import sys

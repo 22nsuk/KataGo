@@ -182,6 +182,10 @@ class Probe:
         started = False
         while time.monotonic() < deadline:
             line = self.line(deadline)
+            # Analysis reports have already been parsed and logged by line()/the reader.
+            # Do not duplicate them in a command response, especially for slow bounded searches.
+            if line.startswith('info '):
+                continue
             if started or line.startswith(f'={serial}'):
                 response_chars += len(line)
                 if response_chars > MAX_RESPONSE_CHARS:
