@@ -127,6 +127,29 @@ representative changes, sticky pruning disablement, and resets on clearing or pl
 a move. Real-process checks also verify that unchanged representatives keep their
 shared analysis rows and that excluded moves never appear in those rows.
 
+### Probe capture and failure handling
+
+Run the probe with assertions enabled. `-O`, `-OO`, and nonzero `PYTHONOPTIMIZE`
+are rejected at module import, before output creation or engine startup. This applies
+to imported use as well as the CLI; C++ Release builds are unaffected.
+
+The existing `gtp.log` and `stderr.log` filenames and plain UTF-8 format are retained.
+Logs are streamed to disk instead of accumulated in memory. Stdout and sent commands
+share a locked transcript; stderr retains only its last 20 lines (up to 2000 characters
+per line) in memory for diagnostics. The complete accepted lines still go to disk.
+The stdout queue holds at most 16 lines, with backpressure rather than dropped reports.
+Lines above 1,048,576 characters and command responses above 4,194,304 characters fail
+explicitly instead of consuming unbounded memory. These generous limits target this
+probe's 9x9 protocol; they are not engine or GUI limits.
+
+After the quit acknowledgement (or a failed quit), readers continue draining to the
+logs without queuing more reports. Reader, decoding, write, flush, or log-close errors
+prevent PASS. All checks, clean process exit, reader joins, and closed log files must
+succeed before `result.json` is published. Failed runs retain the evidence captured
+up to the failure; oversized or undecodable output is not silently accepted or
+promised as a complete log. Streaming bounds capture memory, not total disk usage;
+no analysis sampling, compression dependency, or changed search settings are introduced.
+
 Probe lifecycle and final-report failure handling have a separate standard-library
 test suite, run by the same CI before building the engine:
 
