@@ -2757,7 +2757,6 @@ x.x.x
       testAssert(terminal->getNNOutput() == NULL);
       testAssert(terminal->visitCapSnapshot.load(std::memory_order_acquire) == NULL);
       checkTree(&search, P_BLACK, params.visitCapContempt, params.numThreads);
-      cout << "Terminal leaves past the cap have no child distribution to freeze: 1" << endl;
     }
 
     auto runTest = [&](int numThreads) {
