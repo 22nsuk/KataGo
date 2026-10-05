@@ -28,7 +28,8 @@ def sgf(handicap: str | None, komi: str, rules: str, *, app: bool = True,
     )
     return (
         "(;GM[1]FF[4]SZ[9]PB[filter-test-black]PW[filter-test-white]"
-        "BR[1d]WR[1d]DT[2024-01-01]TM[600]RE[?]"
+        # GC is required by the OGS positive control and ignored by Fox.
+        "BR[1d]WR[1d]DT[2024-01-01]TM[600]GC[ranked]RE[?]"
         + ("AP[foxwq]" if app else "")
         + (f"HA[{handicap}]" if handicap is not None else "")
         + f"KM[{komi}]RU[{rules}]" + placements + moves + ")\n"
@@ -48,11 +49,11 @@ def npy_header(data) -> dict:
 def npz_rows(path: Path) -> int:
     # Check row count and absent search-Q targets without a numpy dependency.
     with zipfile.ZipFile(path) as archive:
-        with archive.open("globalInputNC.npy") as data:
+        with archive.open("globalInputNC") as data:
             shape = npy_header(data)["shape"]
             assert len(shape) == 2 and shape[0] > 0, (path, shape)
             rows = shape[0]
-        with archive.open("qValueTargetsNCMove.npy") as data:
+        with archive.open("qValueTargetsNCMove") as data:
             header = npy_header(data)
             assert header["shape"] == (rows, 3, 82), (path, header)
             assert header["descr"] == "<i2", (path, header)
