@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -142,15 +143,24 @@ class Probe:
                 first = current['visits']
                 if previous is not None:
                     assert first >= previous, f'Tree reset: {first} < {previous} ({restrictions})'
-            if allowed is not None:
-                assert set(current['moves']) <= allowed, (restrictions, current)
-            if forbidden is not None:
-                assert not set(current['moves']) & forbidden, (restrictions, current)
+            self.check_moves(current, restrictions, allowed, forbidden)
             if current['visits'] >= minimum:
                 self.command('name')  # Acknowledged barrier consumes final old analysis before the next request.
                 assert self.last is not None
+                # The barrier may consume additional reports. Validate the actual returned
+                # snapshot too, not just the report that first reached the visit target.
+                assert self.last['visits'] >= current['visits'], (restrictions, current, self.last)
+                self.check_moves(self.last, restrictions, allowed, forbidden)
                 return {**self.last, 'firstVisits': first, 'restriction': restrictions}
         raise AssertionError('Search visit target timed out')
+
+    @staticmethod
+    def check_moves(result: dict, restrictions: str, allowed: set[str] | None,
+                    forbidden: set[str] | None):
+        if allowed is not None:
+            assert set(result['moves']) <= allowed, (restrictions, result)
+        if forbidden is not None:
+            assert not set(result['moves']) & forbidden, (restrictions, result)
 
     def bounded_search(self, restrictions: str, reuse: bool = True) -> dict:
         self.last = None
@@ -172,24 +182,42 @@ class Probe:
                 return current
             previous = current['visits']
 
-    def close(self):
-        if self.process.poll() is None:
+    def close(self) -> bool:
+        clean_exit = self.process.poll() is None
+        if clean_exit:
             try:
                 self.command('quit', timeout=5)
             except (AssertionError, OSError):
+                clean_exit = False
                 self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                clean_exit = False
                 self.process.kill()
                 self.process.wait(timeout=5)
         self.reader.join(timeout=5)
         self.err_reader.join(timeout=5)
+        readers_stopped = not self.reader.is_alive() and not self.err_reader.is_alive()
+        if readers_stopped:
+            for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+                if stream is not None:
+                    stream.close()
+        return clean_exit and self.process.returncode == 0 and readers_stopped
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def run(executable: Path, model: Path, output: Path, player: str = "B", threads: int = 1,
         ownership: bool = False, root_visit_cap: int = 0):
-    output.mkdir(parents=True, exist_ok=True)
+    # Never let a failed rerun inherit a previous PASS or mix logs from different runs.
+    output.mkdir(parents=True, exist_ok=False)
     with tempfile.TemporaryDirectory(prefix='kg-root-reuse-') as directory:
         config = Path(directory) / 'gtp.cfg'
         config.write_text(
@@ -199,6 +227,9 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
             'reportAnalysisWinratesAs = BLACK\nanalysisPVLen = 8\n'
             'nnCacheSizePowerOfTwo = 16\n'
             f'visitCapContempt = {root_visit_cap}\nvisitCapContemptPla = {player}\n', encoding='utf-8')
+        (output / 'gtp.cfg').write_bytes(config.read_bytes())
+        identity = {'engineSha256': file_sha256(executable), 'modelSha256': file_sha256(model),
+                    'configSha256': file_sha256(config)}
         probe = Probe(executable, model, config, player, ownership)
         results = []
         try:
@@ -353,6 +384,17 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
             results.append(legacy)
             probe.command('clear_cache')
             bounded_reset('', legacy, 'clear_cache must invalidate the tree')
+            # Changed komi, rules, or player must still invalidate a reused restricted root.
+            for command in ['komi 8.5', 'kata-set-rules japanese']:
+                restrictions = f'avoid {active} pass 1'
+                previous = probe.warm_bounded(restrictions, warm_minimum)
+                probe.command(command)
+                bounded_reset(restrictions, previous, command)
+            previous = probe.warm_bounded('', warm_minimum)
+            probe.player = 'W' if player == 'B' else 'B'
+            bounded_reset('', previous, 'Changed analysis player')
+            probe.player = player
+            probe.command('kata-set-rules chinese')
             # Continuous kata-analyze above ignores configured move limits. Bounded
             # warmups obeyed maxPlayouts' new-work limit. Only now change parameters
             # and clear the tree to check maxVisits' lifetime-counting semantics.
@@ -365,14 +407,29 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
             assert bounded[1]['visits'] == bounded[0]['visits'], bounded
             assert bounded[1]['moves'].get('F6', 0) == 0, bounded
             results.extend(bounded)
-            (output / 'result.json').write_text(json.dumps(
-                {'status': 'PASS', 'version': version, 'model': model.name, 'player': player,
-                 'threads': threads, 'ownership': ownership, 'rootVisitCap': root_visit_cap, 'cases': results},
-                ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            # Restriction-free, empty-list, and inactive-color encodings must preserve
+            # a capped root without inventing a new bounded-search budget.
+            probe.command('clear_cache')
+            unchanged = probe.bounded_search('')
+            for restrictions in [f'avoid {active} , 1', f'avoid {opposite} D4 1', '']:
+                equivalent = probe.bounded_search(restrictions)
+                assert equivalent['visits'] == unchanged['visits'], (unchanged, equivalent)
+                assert equivalent['moves'] == unchanged['moves'], (unchanged, equivalent)
+                results.append({**equivalent, 'equivalentRootMask': True})
+                unchanged = equivalent
         finally:
-            probe.close()
-            (output / 'gtp.log').write_text('\n'.join(probe.transcript) + '\n', encoding='utf-8')
-            (output / 'stderr.log').write_text('\n'.join(probe.stderr) + '\n', encoding='utf-8')
+            try:
+                clean_exit = probe.close()
+            finally:
+                (output / 'gtp.log').write_text('\n'.join(probe.transcript) + '\n', encoding='utf-8')
+                (output / 'stderr.log').write_text('\n'.join(probe.stderr) + '\n', encoding='utf-8')
+        assert clean_exit, f'KataGo did not exit cleanly: {probe.process.returncode}'
+        # Success includes acknowledged shutdown and saved logs, not only search checks.
+        (output / 'result.json').write_text(json.dumps(
+            {'status': 'PASS', 'version': version, 'model': model.name, 'player': player,
+             'threads': threads, 'ownership': ownership, 'rootVisitCap': root_visit_cap,
+             **identity, 'engineReturnCode': probe.process.returncode, 'cases': results},
+            ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
 def main():

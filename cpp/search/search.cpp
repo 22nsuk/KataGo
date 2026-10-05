@@ -273,12 +273,27 @@ void Search::setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vec
      !rootOnly(avoidMoveUntilByLocBlack) || !rootOnly(avoidMoveUntilByLocWhite))
     clearSearch();
   else if(rootNode != NULL) {
-    rootRestrictionReuseActive = true;
-    // Give the changed support a fresh cap's worth of normal selection before freezing
-    // its distribution. Retained children must not immediately freeze out unallocated moves.
-    rootVisitCapStartVisits = getRootVisits();
-    // Like all setters here, this runs after the caller has stopped the search.
-    delete rootNode->visitCapSnapshot.exchange(NULL, std::memory_order_acq_rel);
+    const auto& oldRootMask = rootPla == P_BLACK ? avoidMoveUntilByLocBlack : avoidMoveUntilByLocWhite;
+    const auto& newRootMask = rootPla == P_BLACK ? bVec : wVec;
+    bool rootMaskChanged = false;
+    for(size_t i = 0; i<std::max(oldRootMask.size(),newRootMask.size()); i++) {
+      int oldDepth = i < oldRootMask.size() ? oldRootMask[i] : 0;
+      int newDepth = i < newRootMask.size() ? newRootMask[i] : 0;
+      if(oldDepth != newDepth) {
+        rootMaskChanged = true;
+        break;
+      }
+    }
+    // First-ply restrictions on the other player and empty/all-zero encodings
+    // do not change this root's support. Keep its snapshot and cap interval intact.
+    if(rootMaskChanged) {
+      rootRestrictionReuseActive = true;
+      // Give the changed support a fresh cap's worth of normal selection before freezing
+      // its distribution. Retained children must not immediately freeze out unallocated moves.
+      rootVisitCapStartVisits = getRootVisits();
+      // Like all setters here, this runs after the caller has stopped the search.
+      delete rootNode->visitCapSnapshot.exchange(NULL, std::memory_order_acq_rel);
+    }
   }
   avoidMoveUntilByLocBlack = bVec;
   avoidMoveUntilByLocWhite = wVec;
