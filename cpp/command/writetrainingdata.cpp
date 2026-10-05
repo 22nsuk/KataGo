@@ -1202,6 +1202,7 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       else if(sgfHandicapParsed == 1 && rules.komi != 0.0) {
         //Weird, let's filter this out.
         reportSgfDone(false,"GameHandicap1MismatchKomi");
+        return;
       }
       else {
         throw StringError(
