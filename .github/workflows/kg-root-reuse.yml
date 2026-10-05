@@ -3,11 +3,15 @@ on:
   pull_request:
     paths:
       - cpp/**
+      - .github/actions/ccache/**
       - python/probe_kg_root_reuse.py
       - python/test_probe_kg_root_reuse.py
       - python/test_fox_sgf_filter.py
       - .github/workflows/kg-root-reuse.yml
   workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
@@ -21,11 +25,17 @@ jobs:
       - name: Check probe lifecycle and final-report regressions
         run: python3 -m unittest discover -s python -p test_probe_kg_root_reuse.py -v
       - name: Install native CPU prerequisites
-        run: sudo apt-get update -qq && sudo apt-get install -y libeigen3-dev zlib1g-dev libzip-dev ninja-build
+        run: sudo apt-get update -qq && sudo apt-get install -y libeigen3-dev zlib1g-dev libzip-dev ninja-build ccache
+      - name: Cache C++ compilation
+        uses: ./.github/actions/ccache
+        with:
+          backend: eigen
       - name: Build this engine revision
         run: |
-          cmake -S cpp -B "$RUNNER_TEMP/kg-build" -G Ninja -DUSE_BACKEND=EIGEN -DCMAKE_BUILD_TYPE=Release
+          cmake -S cpp -B "$RUNNER_TEMP/kg-build" -G Ninja -DUSE_BACKEND=EIGEN -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build "$RUNNER_TEMP/kg-build" --parallel 2
+      - name: Report compiler cache statistics
+        run: ccache --show-stats
       - name: Check native invariants
         working-directory: cpp
         run: |
