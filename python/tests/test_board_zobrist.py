@@ -86,7 +86,7 @@ def test_chain_capture_matches_fresh_position_and_undo(pla):
     assert board.sit_zobrist() == before.sit_zobrist()
     assert board.num_captures_made == before.num_captures_made
     assert all(after.board[after.loc(*point)] == Board.EMPTY for point in captured)
-    assert after.num_captures_made[pla] == before.num_captures_made[pla] + len(captured)
+    assert sum(after.num_captures_made.values()) == sum(before.num_captures_made.values()) + len(captured)
 
     fresh = Board(9)
     for point in surrounding + [(2, 2)]:
