@@ -1,6 +1,6 @@
 # 포크 CI와 캐시 운영
 
-[포크 시작 안내](../README.md) · [루트 탐색 재사용](KG_ROOT_REUSE.md) · [Windows CUDA 번들](KG_WINDOWS_CUDA_BUNDLES.md)
+[포크 시작 안내](../README.md) · [루트 탐색 재사용](KG_ROOT_REUSE.md) · [Windows CUDA 번들](KG_WINDOWS_CUDA_BUNDLES.md) · [검토 메모](KG_REVIEW_FINDINGS.md)
 
 ## 실행 범위와 비용 관리
 
@@ -13,6 +13,7 @@
 | Root tree reuse | 기존 C++·probe·Fox 회귀 경로와 공용 ccache action 변경 PR | Eigen 빌드, 네이티브 테스트, 실제 GTP 6조합, Fox 변환 검증을 모두 실행합니다. |
 | ONNX backend build & test | 기존 C++·ONNX 워크플로·공용 action 변경의 PR와 `master` push | 기본은 CPU·DirectML 3조합만 실행합니다. `include_slow=true`를 명시해야 OpenVINO·TensorRT의 ORT 소스 빌드도 실행합니다. |
 | Windows CUDA source bundles | 기존 C++·번들 스크립트·잠금 파일 변경 PR | CUDA 12·13 프로필을 모두 빌드·검사합니다. 별도 릴리스 발행이나 GPU 승인은 하지 않습니다. |
+| Python board regressions | `python/katago/game/**`, `python/tests/test_board_zobrist.py`, pytest 설정, 이 워크플로 변경의 `master` push와 PR | Python 3.12에서 Board 해시·캡처 undo 회귀만 실행합니다. 엔진 빌드나 GPU 검증이 아닙니다. |
 
 문서 전용 판정은 루트의 Markdown, `docs/`의 Markdown, `LICENSE`, `CONTRIBUTORS`로
 한정합니다. 코드 삭제·코드에서 문서로의 이름 변경·알 수 없는 파일은 빌드를 유지합니다.
@@ -21,10 +22,10 @@ PR은 merge-base부터 head까지, push는 before/after 전체 차이를 읽습�
 워크플로 자체를 경로 필터로 숨기지 않아 기존 일반 빌드 check 이름은 skipped로 남습니다.
 `plan`이 실패하거나 출력이 비어 있으면, 취소된 실행이 아닌 한 전체 빌드를 유지합니다. 저장소의 required-check 설정은 변경하지 않습니다.
 
-네 워크플로 모두 **같은 PR의 오래된 실행만 취소**합니다. 다른 PR, `master` push,
+다섯 워크플로 모두 **같은 PR의 오래된 실행만 취소**합니다. 다른 PR, `master` push,
 수동 실행은 실행 ID로 분리해 서로 취소하지 않습니다. 기존 업로드 종류를 유지하면서
-일반 플랫폼·ONNX 산출물의 보관은 14일로 제한합니다. root 증거는 기존 7일,
-CUDA 산출물·증거는 기존 14일입니다. 중요한 증거는 만료 전에 별도로 보존해야 합니다.
+일반 플랫폼·ONNX 산출물의 보관은 14일로 제한합니다. root 증거와 Python board JUnit
+결과는 7일, CUDA 산출물·증거는 14일입니다. 중요한 증거는 만료 전에 별도로 보존해야 합니다.
 
 ## 캐시 경계
 

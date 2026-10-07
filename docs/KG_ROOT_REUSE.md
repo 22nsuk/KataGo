@@ -21,6 +21,11 @@ The same option is accepted by `kata-genmove_analyze`, `kata-search_analyze`, an
 `kata-search_analyze_cancellable`. It defaults to `false`. Engines without the
 capability should receive normal upstream analysis requests.
 
+The JSON analysis engine does not implement this option. `cpp/command/analysis.cpp`
+still calls `setAvoidMoveUntilByLoc` without the reuse flag, so allow/avoid changes
+there clear the tree. KG-next enables reuse only on the GTP commands above, after
+the capability query.
+
 ## Contract
 
 With the position, player, and search configuration unchanged, a changed restriction
