@@ -15,6 +15,7 @@
 | CUDA 12·13 패키지를 직접 빌드·검사 | [잠금 파일·프로필·배포 ZIP 계약](docs/KG_WINDOWS_CUDA_BUNDLES.md) |
 | CUDA 13 Windows 실기 검증 | [런타임 준비와 GPU 승인 절차](docs/KG_CUDA13_WINDOWS.md) |
 | CI 실행 범위·캐시·검증 증거 관리 | [포크 CI와 캐시 운영](docs/KG_CI.md) |
+| 포크 검토 메모 | [검토 결과와 남은 개선](docs/KG_REVIEW_FINDINGS.md) |
 | 일반 빌드·업스트림 기능 사용 | [컴파일 안내](Compiling.md) · [업스트림 개요](#overview) |
 
 **설치 전에 확인할 점:** 포크의 `katago-source-<커밋>-windows-nvidia*.zip`은

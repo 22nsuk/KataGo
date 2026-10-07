@@ -1,6 +1,6 @@
 # 포크 CI와 캐시 운영
 
-[포크 시작 안내](../README.md) · [루트 탐색 재사용](KG_ROOT_REUSE.md) · [Windows CUDA 번들](KG_WINDOWS_CUDA_BUNDLES.md)
+[포크 시작 안내](../README.md) · [루트 탐색 재사용](KG_ROOT_REUSE.md) · [Windows CUDA 번들](KG_WINDOWS_CUDA_BUNDLES.md) · [검토 메모](KG_REVIEW_FINDINGS.md)
 
 ## 실행 범위와 비용 관리
 
@@ -13,6 +13,7 @@
 | Root tree reuse | 기존 C++·probe·Fox 회귀 경로와 공용 ccache action 변경 PR | Eigen 빌드, 네이티브 테스트, 실제 GTP 6조합, Fox 변환 검증을 모두 실행합니다. |
 | ONNX backend build & test | 기존 C++·ONNX 워크플로·공용 action 변경의 PR와 `master` push | 기본은 CPU·DirectML 3조합만 실행합니다. `include_slow=true`를 명시해야 OpenVINO·TensorRT의 ORT 소스 빌드도 실행합니다. |
 | Windows CUDA source bundles | 기존 C++·번들 스크립트·잠금 파일 변경 PR | CUDA 12·13 프로필을 모두 빌드·검사합니다. 별도 릴리스 발행이나 GPU 승인은 하지 않습니다. |
+| Python board regressions | `python/katago/game/**`, `python/tests/test_board_zobrist.py`, pytest 설정, 이 워크플로 변경의 `master` push와 PR | Python 3.12에서 Board 해시·캡처 undo 회귀만 실행합니다. 엔진 빌드나 GPU 검증이 아닙니다. |
 
 문서 전용 판정은 루트의 Markdown, `docs/`의 Markdown, `LICENSE`, `CONTRIBUTORS`로
 한정합니다. 코드 삭제·코드에서 문서로의 이름 변경·알 수 없는 파일은 빌드를 유지합니다.
@@ -21,10 +22,29 @@ PR은 merge-base부터 head까지, push는 before/after 전체 차이를 읽습�
 워크플로 자체를 경로 필터로 숨기지 않아 기존 일반 빌드 check 이름은 skipped로 남습니다.
 `plan`이 실패하거나 출력이 비어 있으면, 취소된 실행이 아닌 한 전체 빌드를 유지합니다. 저장소의 required-check 설정은 변경하지 않습니다.
 
-네 워크플로 모두 **같은 PR의 오래된 실행만 취소**합니다. 다른 PR, `master` push,
+다섯 워크플로 모두 **같은 PR의 오래된 실행만 취소**합니다. 다른 PR, `master` push,
 수동 실행은 실행 ID로 분리해 서로 취소하지 않습니다. 기존 업로드 종류를 유지하면서
-일반 플랫폼·ONNX 산출물의 보관은 14일로 제한합니다. root 증거는 기존 7일,
-CUDA 산출물·증거는 기존 14일입니다. 중요한 증거는 만료 전에 별도로 보존해야 합니다.
+일반 플랫폼·ONNX 산출물의 보관은 14일로 제한합니다. root 증거와 Python board JUnit
+결과는 7일, CUDA 산출물·증거는 14일입니다. 중요한 증거는 만료 전에 별도로 보존해야 합니다.
+
+## 릴리스 소스와 검증 대상
+
+PR 실행에서 Root tree reuse는 checkout 기본값인 **시험 병합 커밋**을 검사합니다.
+Windows CUDA source bundles는 `SOURCE_SHA`로 지정한 **PR head**를 빌드합니다.
+두 워크플로 모두 `master` push로는 실행되지 않으므로, PR의 성공만으로 이후 릴리스
+커밋과 배포 ZIP까지 검증됐다고 보지 않습니다.
+
+카탈로그 승격 전에는 릴리스 소스 SHA를 고정하고, 그 커밋을 가리키는 태그 또는 브랜치
+이름을 `workflow_dispatch`의 `ref`로 사용해 두 워크플로를 실행합니다. 두 실행의
+`head_sha`, checkout 기록과 CUDA receipt의 `sourceCommit`이 의도한 릴리스 SHA와
+일치하는지 확인하고, root 검사와 CUDA 12·13 두 프로필이 모두 성공해야 합니다.
+실행 링크·probe 결과·배포 파일 해시를 함께 보존합니다. 이는 수동 릴리스 절차이며,
+새로운 자동 차단이나 모든 push의 추가 빌드를 도입하는 것은 아닙니다.
+
+이 성공은 GPU 추론 승인이 아닙니다. 배포할 정확한 실행 파일과 모델·설정으로
+[Windows CUDA 실기 승인 범위](KG_WINDOWS_CUDA_BUNDLES.md)를 별도 검증하고,
+원본 receipt의 `PENDING_HARDWARE`는 유지한 채 실기 증거를 따로 기록합니다.
+한 모델·한 색·한 스레드 설정의 smoke 결과를 전체 실기 승인으로 확대하지 않습니다.
 
 ## 캐시 경계
 
@@ -79,6 +99,8 @@ configure/build/test 시간, cache restore/save 시간과 크기를 분리해 �
 
 ## 공식 참고
 
+- [GitHub PR의 시험 병합 ref](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request)
+- [GitHub 수동 실행의 branch/tag ref](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
 - [GitHub 캐시 범위와 동작](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)
 - [GitHub 동시 실행과 조건부 취소](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
 - [ccache 매뉴얼](https://ccache.dev/manual/latest.html)

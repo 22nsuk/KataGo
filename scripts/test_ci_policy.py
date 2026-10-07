@@ -18,7 +18,7 @@ def load(path):
 
 class PolicyTests(unittest.TestCase):
     def test_only_superseded_pr_runs_share_a_cancellation_group(self):
-        for name in ('build', 'kg-root-reuse', 'windows-cuda-bundles', 'onnx-backend'):
+        for name in ('build', 'kg-root-reuse', 'windows-cuda-bundles', 'onnx-backend', 'python-board'):
             with self.subTest(workflow=name):
                 concurrency = load(f'.github/workflows/{name}.yml')['concurrency']
                 group = concurrency['group']
