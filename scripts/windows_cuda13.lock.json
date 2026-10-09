@@ -134,7 +134,6 @@
       "sha256": "8caabc5675950f52d285a686c19727f7a56a982313a7f055ade060ba78df552e"
     }
   ],
-  "manifestUrl": "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.2.2.json",
   "runtimeFiles": [
     "cudart64_13.dll",
     "cublas64_13.dll",

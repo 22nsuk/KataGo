@@ -6,7 +6,6 @@ on:
     paths:
       - python/katago/game/**
       - python/tests/test_board_zobrist.py
-      - '**/conftest.py'
       - pytest.ini
       - python/pytest.ini
       - .github/workflows/python-board.yml
@@ -15,7 +14,6 @@ on:
     paths:
       - python/katago/game/**
       - python/tests/test_board_zobrist.py
-      - '**/conftest.py'
       - pytest.ini
       - python/pytest.ini
       - .github/workflows/python-board.yml
