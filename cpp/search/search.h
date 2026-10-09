@@ -100,8 +100,7 @@ struct Search {
   //of depth that it should be banned.
   std::vector<int> avoidMoveUntilByLocBlack;
   std::vector<int> avoidMoveUntilByLocWhite;
-  // KG-next: a root-only filter may mask existing children instead of discarding them.
-  // Kept until the position changes so clearing the filter also restores symmetric children.
+  // KG-next: keeps retained children masked until the position changes or the tree is cleared.
   bool rootRestrictionReuseActive;
   // A changed symmetry partition must not prune retained children. Once disabled,
   // keep it disabled until the position changes or the tree is cleared.
