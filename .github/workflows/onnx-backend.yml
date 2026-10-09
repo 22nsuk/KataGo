@@ -109,7 +109,7 @@ jobs:
           retention-days: 14
 
   build-slow:
-    # from-source ORT builds (1-3h) only on manual dispatch.
+    # from-source ORT builds (1-3h) only on manual dispatch with include_slow=true.
     if: github.event_name == 'workflow_dispatch' && inputs.include_slow
     name: ${{ matrix.ep }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -160,7 +160,7 @@ jobs:
           retention-days: 14
 
   build-tensorrt:
-    # ORT from-source TensorRT build (1-2h), dispatch-only. Runs inside the official NGC
+    # ORT from-source TensorRT build (1-2h), only on manual dispatch with include_slow=true. Runs inside the official NGC
     # TensorRT container (nvcr.io/nvidia/tensorrt:25.03-py3 = CUDA 12.8 + TensorRT 10.9, the
     # combo ORT is built/tested against), so the CUDA/cuDNN/TensorRT SDKs are preinstalled
     # and no SDK install step is needed. github-hosted runners have no GPU, so this job
