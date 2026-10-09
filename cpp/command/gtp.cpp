@@ -62,7 +62,7 @@ static const vector<string> knownCommands = {
 
   //Clears neural net cached evaluations and bot search tree, allows fresh randomization
   "clear_cache",
-  "kg-reuse-root-tree", // Capability query: supports reuseRootTree on kata-analyze.
+  "kg-reuse-root-tree", // Capability query: supports reuseRootTree on the kata analyze commands.
 
   "showboard",
   "fixed_handicap",

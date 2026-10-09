@@ -140,14 +140,12 @@ to imported use as well as the CLI; C++ Release builds are unaffected.
 
 The existing `gtp.log` and `stderr.log` filenames and plain UTF-8 format are retained.
 Logs are streamed to disk instead of accumulated in memory. Stdout and sent commands
-share a locked transcript; stderr retains only its last 20 lines (up to 2000 characters
-per line) in memory for diagnostics. The complete accepted lines still go to disk.
-The stdout queue holds at most 16 lines, with backpressure rather than dropped reports.
-Lines above 1,048,576 characters and non-analysis response text above 4,194,304 characters
-fail explicitly instead of consuming unbounded memory. Analysis reports are parsed and
-logged but not duplicated into command return strings, so slow bounded searches may
-produce more total analysis than that response limit. These generous limits target this
-probe's 9x9 protocol; they are not engine or GUI limits.
+share a locked transcript; stderr retains an in-memory tail for diagnostics. The complete
+accepted lines still go to disk. The stdout queue applies backpressure rather than
+dropping reports. Oversized lines and non-analysis response text fail explicitly
+instead of consuming unbounded memory. Analysis reports are parsed and logged but not
+duplicated into command return strings. These limits target this probe's 9x9 protocol;
+they are not engine or GUI limits.
 
 After the quit acknowledgement (or a failed quit), readers continue draining to the
 logs without queuing more reports. Reader, decoding, write, flush, or log-close errors
