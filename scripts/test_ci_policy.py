@@ -27,6 +27,16 @@ class PolicyTests(unittest.TestCase):
                 self.assertIn('github.event.pull_request.number || github.run_id', group)
                 self.assertEqual(concurrency['cancel-in-progress'], "${{ github.event_name == 'pull_request' }}")
 
+    def test_board_workflow_scopes_conftests_to_test_ancestors(self):
+        workflow = load('.github/workflows/python-board.yml')
+        test_file = Path('python/tests/test_board_zobrist.py')
+        expected = {(parent / 'conftest.py').as_posix() for parent in test_file.parents}
+        for event in ('push', 'pull_request'):
+            with self.subTest(event=event):
+                paths = workflow['on'][event]['paths']
+                self.assertIn(test_file.as_posix(), paths)
+                self.assertEqual({path for path in paths if path.endswith('conftest.py')}, expected)
+
     def test_general_workflow_stays_visible_and_gates_only_native_jobs(self):
         workflow = load('.github/workflows/build.yml')
         for event in ('push', 'pull_request'):
