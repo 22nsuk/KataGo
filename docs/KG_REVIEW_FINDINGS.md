@@ -46,11 +46,9 @@ The items distinguish release gates, process guards, corrections included here, 
 
 ### 1. Release gate — exact release-source validation
 
-**Fork-owned. Manual procedure documented here; no new automatic gate.**
+**Fork-owned. Manual procedure; no new automatic gate.**
 
-[Root reuse](https://github.com/22nsuk/KataGo/blob/0feaf24d35f75d6b424b7db3f24063d5a78fa1be/.github/workflows/kg-root-reuse.yml) and [Windows CUDA bundles](https://github.com/22nsuk/KataGo/blob/0feaf24d35f75d6b424b7db3f24063d5a78fa1be/.github/workflows/windows-cuda-bundles.yml) trigger on path-filtered `pull_request` and `workflow_dispatch`, not `master` push. Their PR source selection differs: root reuse uses checkout's default synthetic merge ref, whereas CUDA sets `SOURCE_SHA` to `github.event.pull_request.head.sha` and explicitly checks out that head. Root PR CI therefore does test the then-current merged result; neither workflow automatically revalidates the eventual release commit after merging. A later base change can also make earlier evidence stale. General Build and Test on `push` does not substitute for the GTP/Fox probes or CUDA bundle build.
-
-Before catalog promotion, dispatch both workflows using a branch or tag name resolving to the chosen release commit. Check each run's `head_sha` and checkout identity, the CUDA receipt's `sourceCommit`, successful root tests and both CUDA profiles, and preserve the evidence. The [CI guide](KG_CI.md) states this procedure. `workflow_dispatch.ref` accepts a branch/tag name; a bare SHA is not the documented dispatch contract ([GitHub API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)). Full hardware acceptance remains a separate gate. This PR does not enable builds on every push or change required-check settings.
+The release-dispatch procedure is in the [CI guide](KG_CI.md#릴리스-소스와-검증-대상).
 
 ### 2. Process guard — leave PR #5 on its upstream-review base
 
