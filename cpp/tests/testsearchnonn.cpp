@@ -234,6 +234,71 @@ static void runRootReuseInvariantTests(const string& modelFile, Logger& logger) 
       }
     }
   }
+  // Once the visit budget is exhausted, hiding all allocated children falls back
+  // to direct policy moves. Their selection indices no longer identify those children.
+  for(Player pla: {P_BLACK,P_WHITE}) {
+    for(bool useGraphSearch: {false,true}) {
+      SearchParams params;
+      params.maxVisits = 128;
+      params.numThreads = 1;
+      params.useGraphSearch = useGraphSearch;
+      params.useEvalCache = useGraphSearch;
+      params.rootSymmetryPruning = true;
+      Search search(params,nnEval,&logger,"root-reuse-policy-fallback-pv");
+      BoardHistory hist(board,pla,Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+      search.setPosition(pla,board,hist);
+      const Loc oldMove = Location::ofString("D4",board);
+      auto allowOnly = [&](Loc move) {
+        vector<int> mask(Board::MAX_ARR_SIZE,1);
+        mask[move] = 0;
+        search.setAvoidMoveUntilByLoc(pla == P_BLACK ? mask : vector<int>(),
+                                     pla == P_WHITE ? mask : vector<int>(),true);
+      };
+      allowOnly(oldMove);
+      search.runWholeSearch(pla);
+      SearchNode* root = search.rootNode;
+      ConstSearchNodeChildrenReference children = root->getChildren();
+      testAssert(children.iterateAndCountChildren() == 1);
+      testAssert(children[0].getMoveLoc() == oldMove);
+      const SearchNode* oldChild = children[0].getIfAllocated();
+      const int64_t rootVisits = search.getRootVisits();
+      const int64_t oldEdgeVisits = children[0].getEdgeVisits();
+      testAssert(rootVisits == params.maxVisits);
+      vector<Loc> oldPV, scratchLocs;
+      vector<int64_t> oldPVVisits, oldPVEdgeVisits;
+      vector<double> scratchValues;
+      search.appendPV(oldPV,oldPVVisits,oldPVEdgeVisits,scratchLocs,scratchValues,root,8);
+      testAssert(oldPV.size() > 1 && oldPV[0] == oldMove);
+      testAssert(oldPVVisits[0] > 0 && oldPVEdgeVisits[0] == oldEdgeVisits);
+
+      for(Loc move: {Location::ofString("F6",board),Board::PASS_LOC,oldMove}) {
+        allowOnly(move);
+        search.runWholeSearch(pla);
+        testAssert(search.rootNode == root && search.getRootVisits() == rootVisits);
+        testAssert(root->getChildren().iterateAndCountChildren() == 1);
+        testAssert(root->getChildren()[0].getIfAllocated() == oldChild);
+        testAssert(root->getChildren()[0].getEdgeVisits() == oldEdgeVisits);
+        testAssert(search.getChosenMoveLoc() == move);
+        // Cover both the root/log PV and a PV requested for a particular move.
+        for(bool specificMove: {false,true}) {
+          vector<Loc> pv;
+          vector<int64_t> visits, edgeVisits;
+          if(specificMove)
+            search.appendPVForMove(pv,visits,edgeVisits,scratchLocs,scratchValues,root,move,8);
+          else
+            search.appendPV(pv,visits,edgeVisits,scratchLocs,scratchValues,root,8);
+          if(move == oldMove) {
+            testAssert(pv == oldPV);
+            testAssert(visits == oldPVVisits && edgeVisits == oldPVEdgeVisits);
+          }
+          else {
+            testAssert(pv == vector<Loc>{move});
+            testAssert(visits == vector<int64_t>{0} && edgeVisits == vector<int64_t>{0});
+          }
+        }
+      }
+    }
+  }
   for(Player pla: {P_BLACK,P_WHITE}) {
     SearchParams params;
     params.maxVisits = 64;

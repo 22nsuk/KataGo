@@ -857,8 +857,9 @@ void Search::appendPVForMove(
       return;
     }
     const SearchNode* child = children[bestChildIdx].getIfAllocated();
-    //Direct policy move
-    if(child == NULL) {
+    // Policy fallback may replace the move list while masked children stay allocated.
+    // Only descend if this index still identifies the selected move's child.
+    if(child == NULL || children[bestChildIdx].getMoveLocRelaxed() != bestChildMoveLoc) {
       buf.push_back(bestChildMoveLoc);
       visitsBuf.push_back(0);
       edgeVisitsBuf.push_back(0);
