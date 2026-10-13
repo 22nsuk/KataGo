@@ -3,6 +3,7 @@
 
 Use an Eigen build and the repository's small test model. Fixtures are synthetic
 30-move records, not evidence that additional real-world Fox handicaps are safe.
+Run with assertions enabled; optimized Python is rejected before creating evidence.
 """
 
 import argparse
@@ -13,6 +14,11 @@ import re
 import struct
 import subprocess
 import zipfile
+
+
+# Assertions are part of this verifier's acceptance contract, including when imported.
+if not __debug__:
+    raise RuntimeError('Run the verifier without -O, -OO, or PYTHONOPTIMIZE; its checks require assertions.')
 
 
 MOVE_COUNT = 30
