@@ -65,7 +65,7 @@ class PolicyTests(unittest.TestCase):
         self.assertRegex(restore['uses'], r'@\w{40}$')
         self.assertIn('CCACHE_COMPILERCHECK=content', cache['runs']['steps'][0]['run'])
         self.assertIn('CCACHE_MAXSIZE=256M', cache['runs']['steps'][0]['run'])
-        build = (ROOT / '.github/workflows/build.yml').read_text()
+        build = (ROOT / '.github/workflows/build.yml').read_text(encoding='utf-8')
         self.assertNotIn('cpp/CMakeCache.txt', build)
         self.assertNotIn('cpp/CMakeFiles', build)
         self.assertNotIn('cpp/.ninja_deps', build)
@@ -127,7 +127,7 @@ class PolicyTests(unittest.TestCase):
             self.assertIn("github.event_name == 'workflow_dispatch'", workflow['jobs'][name]['if'])
 
     def test_fork_entrypoint_links_exist(self):
-        readme = (ROOT / 'README.md').read_text()
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
         intro = readme.split('<!-- END KG-NEXT FORK ENTRY -->')[0]
         self.assertIn('PENDING_HARDWARE', intro)
         self.assertIn('docs/KG_CI.md', intro)

@@ -23,8 +23,8 @@ class ScopeTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def git(self, *args):
-        return subprocess.check_output(['git', *args], cwd=self.root, stderr=subprocess.PIPE).decode().strip()
+    def git(self, *args, data=None):
+        return subprocess.check_output(['git', *args], cwd=self.root, input=data, stderr=subprocess.PIPE).decode().strip()
 
     def write(self, name, text):
         path = self.root / name
@@ -81,8 +81,13 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(self.selected(self.commit()))
 
     def test_nul_delimited_unusual_doc_name(self):
-        self.write('docs/name\nwith newline.md', 'doc\n')
-        self.assertFalse(self.selected(self.commit()))
+        # Git trees can contain this name even when the host filesystem cannot.
+        blob = self.git('rev-parse', f'{self.base}:README.md')
+        docs = self.git('mktree', '-z', data=f'100644 blob {blob}\tname\nwith newline.md\0'.encode())
+        entries = self.git('ls-tree', '-z', self.base)
+        tree = self.git('mktree', '-z', data=(entries + f'040000 tree {docs}\tdocs\0').encode())
+        head = self.git('commit-tree', tree, '-p', self.base, '-m', 'newline fixture')
+        self.assertFalse(self.selected(head))
 
     def test_real_cli_writes_selection_for_a_documentation_change(self):
         self.write('README.md', 'changed\n')
