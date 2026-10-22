@@ -597,6 +597,11 @@ void Search::selectBestChildToDescend(
     node, thread.pla, isRoot, policyProbMassVisited,
     parentUtility, parentWeightPerVisit, parentUtilityStdevFactor
   );
+  if(isRoot && rootRestrictionReuseActive && searchParams.futileVisitsThreshold > 0.0) {
+    // Root weight excludes masked children, but lifetime visits still count them.
+    // Estimate pruning costs from the same allowed edges, plus the root's own visit.
+    parentWeightPerVisit = node.stats.weightSum.load(std::memory_order_acquire) / (1.0 + totalChildEdgeVisits);
+  }
 
   bool posesWithChildBuf[NNPos::MAX_NN_POLICY_SIZE] = { }; // Initialize all to false
   bool antiMirror = searchParams.antiMirror && mirroringPla != C_EMPTY && isMirroringSinceSearchStart(thread.history,0);

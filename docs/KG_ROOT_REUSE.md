@@ -81,6 +81,11 @@ retained visits, including visits to children currently hidden by the root mask;
 interval described above controls when the root distribution freezes, not when the
 search stops, and does not reset or extend either limit.
 
+When `futileVisitsThreshold` is enabled, pruning estimates the cost of exploring a
+candidate from the currently allowed root edges. Hidden visits do not make a new
+candidate appear too expensive, but visits already invested in allowed candidates
+still count toward the pruning decision. This does not change the search limits above.
+
 `kata-analyze` is continuous analysis and ignores the configured move-search limits.
 In contrast, `kata-search_analyze`, `kata-search_analyze_cancellable`, and
 `kata-genmove_analyze` obey them. If a retained tree has already reached `maxVisits`,
