@@ -1226,12 +1226,21 @@ void Search::recursivelyRecomputeStats(SearchNode& n) {
 }
 
 void Search::recursivelyRecordEvalCache(SearchNode& n) {
+  const auto& rootAvoidMoveUntilByLoc = rootPla == P_BLACK ? avoidMoveUntilByLocBlack : avoidMoveUntilByLocWhite;
+  const bool canRecordRootAggregate = std::none_of(
+    rootAvoidMoveUntilByLoc.begin(), rootAvoidMoveUntilByLoc.end(), [](int depth) { return depth > 0; }
+  );
   std::function<void(SearchNode*,int)> f = [&](const SearchNode* node, int threadIdx) {
     (void)threadIdx;
     int64_t numVisits = node->stats.visits.load(std::memory_order_acquire);
     if(numVisits >= searchParams.evalCacheMinVisits && !node->forceNonTerminal) {
       bool isRootNode = (node==rootNode);
-      evalCache->update(getEvalCacheKey(node->graphHash), node, searchParams.evalCacheMinVisits, isRootNode);
+      // The shared key does not include root restrictions. Preserve any earlier
+      // unrestricted aggregate while still recording valid child evaluations.
+      evalCache->update(
+        getEvalCacheKey(node->graphHash), node, searchParams.evalCacheMinVisits,
+        isRootNode, !isRootNode || canRecordRootAggregate
+      );
     }
   };
   vector<SearchNode*> nodes;

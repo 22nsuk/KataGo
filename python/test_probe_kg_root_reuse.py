@@ -97,44 +97,6 @@ class ProbeLifecycleTests(unittest.TestCase):
         probe.process.kill.assert_called_once_with()
 
 
-class FinalReportTests(unittest.TestCase):
-    def run_search(self, final, **restrictions):
-        probe = probe_module.Probe.__new__(probe_module.Probe)
-        probe.player = 'B'
-        probe.ownership = False
-        probe.last = None
-        before = {'visits': 100, 'moves': {'D4': 99}}
-
-        def command(text):
-            if text == 'name':
-                probe.last = final
-            return ''
-
-        def line(deadline):
-            probe.last = before
-            return 'info'
-
-        probe.command = command
-        probe.line = line
-        return probe.search('test-mask', 100, **restrictions)
-
-    def test_barrier_report_is_checked_for_allowed_and_forbidden_moves(self):
-        invalid = {'visits': 101, 'moves': {'F6': 100}}
-        for restrictions in ({'allowed': {'D4'}}, {'forbidden': {'F6'}}):
-            with self.subTest(restrictions=restrictions):
-                with self.assertRaises(AssertionError):
-                    self.run_search(invalid, **restrictions)
-
-    def test_barrier_report_cannot_lose_visits(self):
-        with self.assertRaises(AssertionError):
-            self.run_search({'visits': 99, 'moves': {'D4': 98}})
-
-    def test_valid_final_report_is_returned(self):
-        result = self.run_search({'visits': 105, 'moves': {'D4': 104}}, allowed={'D4'})
-        self.assertEqual(result['visits'], 105)
-        self.assertEqual(result['firstVisits'], 100)
-
-
 class OptimizationTests(unittest.TestCase):
     def test_optimized_cli_and_import_fail_before_side_effects(self):
         script = Path(probe_module.__file__).resolve()
@@ -335,30 +297,104 @@ sys.stdin.read()
             with self.assertRaisesRegex(AssertionError, 'response exceeds capture limit'):
                 probe.command('name', timeout=5)
 
-    def test_streamed_and_stop_barrier_violations_still_fail(self):
-        for stage in ('streamed', 'barrier'):
-            with self.subTest(stage=stage):
-                bad = 'info move F6 visits 99 rootInfo visits 100'
-                good = 'info move D4 visits 99 rootInfo visits 100'
-                body = f'''
+    @staticmethod
+    def analysis_body(stage, violation=None, recover=True):
+        first = 101 if stage == 'barrier' else 100
+        reports = [f'info move D4 visits {visits - 1} rootInfo visits {visits}'
+                   for visits in range(first, first + 3)]
+        if violation == 'move':
+            reports[1] = reports[1].replace('move D4', 'move F6')
+        elif violation == 'visits':
+            reports[1] = 'info move D4 visits 89 rootInfo visits 90'
+        if not recover:
+            reports = reports[:2]
+        body = f'''
 import sys
+reports = {reports!r}
+def emit_reports():
+    for report in reports:
+        print(report, flush=True)
 for request in sys.stdin:
     serial, command = request.strip().split(' ', 1)
-    if command.startswith('kata-analyze'):
+    if command.startswith('kata-search_analyze'):
+        print('=' + serial, flush=True)
+        emit_reports()
+        print('', flush=True)
+    elif command.startswith('kata-analyze'):
+        if {stage == 'start'!r}:
+            emit_reports()
         print('=' + serial + '\\n', flush=True)
-        print({bad if stage == 'streamed' else good!r}, flush=True)
+        if {stage == 'streamed'!r}:
+            emit_reports()
+        print('info move D4 visits {99 if stage == 'barrier' else 102} rootInfo visits {100 if stage == 'barrier' else 103}', flush=True)
     else:
         if command == 'name':
-            print({bad!r}, flush=True)
+            if {stage == 'barrier'!r}:
+                emit_reports()
+            else:
+                print('info move D4 visits 103 rootInfo visits 104', flush=True)
+                print('info move D4 visits 104 rootInfo visits 105', flush=True)
         print('=' + serial + '\\n', flush=True)
         if command == 'quit':
             break
 '''
+        return body, reports
+
+    def test_intermediate_continuous_report_violations_fail(self):
+        for stage in ('start', 'streamed', 'barrier'):
+            for violation, restrictions in (('move', {'allowed': {'D4'}}),
+                                            ('move', {'forbidden': {'F6'}}),
+                                            ('visits', {'allowed': {'D4'}})):
+                with self.subTest(stage=stage, violation=violation, restrictions=restrictions):
+                    body, reports = self.analysis_body(stage, violation)
+                    with self.producer(body) as (probe, root):
+                        with self.assertRaises(AssertionError):
+                            probe.search('test-mask', 100 if stage == 'barrier' else 103,
+                                         previous=100, **restrictions)
+                        self.assertTrue(probe.close())
+                        transcript = (root / 'gtp.log').read_text(encoding='utf-8')
+                        for report in reports:
+                            self.assertIn('< ' + report + '\n', transcript)
+
+    def test_intermediate_bounded_report_violations_fail(self):
+        for violation, restrictions in (('move', {'allowed': {'D4'}}),
+                                        ('move', {'forbidden': {'F6'}}),
+                                        ('visits', {'allowed': {'D4'}})):
+            with self.subTest(violation=violation, restrictions=restrictions):
+                body, reports = self.analysis_body('bounded', violation)
                 with self.producer(body) as (probe, root):
                     with self.assertRaises(AssertionError):
-                        probe.search('', 100, allowed={'D4'})
+                        probe.bounded_search('test-mask', **restrictions)
                     self.assertTrue(probe.close())
-                    self.assertIn(bad, (root / 'gtp.log').read_text())
+                    transcript = (root / 'gtp.log').read_text(encoding='utf-8')
+                    for report in reports:
+                        self.assertIn('< ' + report + '\n', transcript)
+
+    def test_final_stop_barrier_report_violations_fail(self):
+        for violation, restrictions in (('move', {'allowed': {'D4'}}),
+                                        ('move', {'forbidden': {'F6'}}),
+                                        ('visits', {'allowed': {'D4'}})):
+            with self.subTest(violation=violation, restrictions=restrictions):
+                body, _ = self.analysis_body('barrier', violation, recover=False)
+                with self.producer(body) as (probe, _):
+                    with self.assertRaises(AssertionError):
+                        probe.search('test-mask', 100, previous=100, **restrictions)
+                    self.assertTrue(probe.close())
+
+    def test_multiple_valid_reports_pass_at_every_consumption_stage(self):
+        for stage in ('start', 'streamed', 'barrier', 'bounded'):
+            with self.subTest(stage=stage):
+                body, _ = self.analysis_body(stage)
+                with self.producer(body) as (probe, _):
+                    if stage == 'bounded':
+                        result = probe.bounded_search('test-mask', allowed={'D4'})
+                        self.assertEqual(result['visits'], 102)
+                    else:
+                        result = probe.search('test-mask', 100 if stage == 'barrier' else 103,
+                                              previous=100, allowed={'D4'})
+                        self.assertEqual(result['firstVisits'], 100)
+                        self.assertEqual(result['visits'], 103 if stage == 'barrier' else 105)
+                    self.assertTrue(probe.close())
 
 
 if __name__ == '__main__':

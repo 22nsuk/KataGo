@@ -29,6 +29,29 @@ STDERR_TAIL_LINES = 20
 STDERR_TAIL_CHARS = 2000
 
 
+class ReportChecks:
+    """Validate each consumed report within one search request, including barriers."""
+    def __init__(self, restrictions: str, previous: int | None = None,
+                 allowed: set[str] | None = None, forbidden: set[str] | None = None):
+        self.restrictions = restrictions
+        self.previous = previous
+        self.allowed = allowed
+        self.forbidden = forbidden
+        self.first_visits: int | None = None
+
+    def check(self, result: dict) -> None:
+        if self.allowed is not None:
+            assert set(result['moves']) <= self.allowed, (self.restrictions, result)
+        if self.forbidden is not None:
+            assert not set(result['moves']) & self.forbidden, (self.restrictions, result)
+        if self.previous is not None:
+            assert result['visits'] >= self.previous, (
+                'Root visits decreased', self.restrictions, self.previous, result)
+        if self.first_visits is None:
+            self.first_visits = result['visits']
+        self.previous = result['visits']
+
+
 class Probe:
     def __init__(self, executable: Path, model: Path, config: Path, player: str, ownership: bool,
                  *, transcript: TextIO, stderr_log: TextIO):
@@ -110,7 +133,7 @@ class Probe:
         except (OSError, UnicodeError, ValueError) as error:
             self.stderr_error = error
 
-    def line(self, deadline: float) -> str:
+    def line(self, deadline: float, checks: ReportChecks | None = None) -> str:
         while True:
             self.check_readers()
             remaining = deadline - time.monotonic()
@@ -142,6 +165,8 @@ class Probe:
                     self.check_ownership(sections[1], 'ownership')
                 self.last = {'visits': int(root[1]), 'moves': moves,
                              'moveDetails': details, 'root': self.fields(sections[1])}
+                if checks is not None:
+                    checks.check(self.last)
         return line
 
     @staticmethod
@@ -168,7 +193,7 @@ class Probe:
         assert len(values) == 81, (key, len(values))
         assert all(math.isfinite(value) and -1.000001 <= value <= 1.000001 for value in values), key
 
-    def command(self, text: str, timeout: float = 90) -> str:
+    def command(self, text: str, timeout: float = 90, *, checks: ReportChecks | None = None) -> str:
         self.serial += 1
         serial = self.serial
         self.check_readers()
@@ -181,8 +206,8 @@ class Probe:
         response_chars = 0
         started = False
         while time.monotonic() < deadline:
-            line = self.line(deadline)
-            # Analysis reports have already been parsed and logged by line()/the reader.
+            line = self.line(deadline, checks)
+            # Analysis reports have already been parsed, checked, and logged.
             # Do not duplicate them in a command response, especially for slow bounded searches.
             if line.startswith('info '):
                 continue
@@ -207,44 +232,30 @@ class Probe:
                allowed: set[str] | None = None, forbidden: set[str] | None = None,
                reuse: bool = True) -> dict:
         self.last = None
+        checks = ReportChecks(restrictions, previous, allowed, forbidden)
         self.command(f'kata-analyze {self.player} interval 1 rootInfo true pvEdgeVisits true minmoves 30 '
                      + ('ownership true movesOwnership true ' if self.ownership else '')
-                     + ('reuseRootTree true ' if reuse else '') + restrictions)
+                     + ('reuseRootTree true ' if reuse else '') + restrictions, checks=checks)
         deadline = time.monotonic() + 90
-        first = None
         while time.monotonic() < deadline:
-            self.line(deadline)
+            self.line(deadline, checks)
             if self.last is None:
                 continue
             current = self.last
-            if first is None:
-                first = current['visits']
-                if previous is not None:
-                    assert first >= previous, f'Tree reset: {first} < {previous} ({restrictions})'
-            self.check_moves(current, restrictions, allowed, forbidden)
             if current['visits'] >= minimum:
-                self.command('name')  # Acknowledged barrier consumes final old analysis before the next request.
+                # Validate every report drained before the acknowledged stop barrier.
+                self.command('name', checks=checks)
                 assert self.last is not None
-                # The barrier may consume additional reports. Validate the actual returned
-                # snapshot too, not just the report that first reached the visit target.
-                assert self.last['visits'] >= current['visits'], (restrictions, current, self.last)
-                self.check_moves(self.last, restrictions, allowed, forbidden)
-                return {**self.last, 'firstVisits': first, 'restriction': restrictions}
+                return {**self.last, 'firstVisits': checks.first_visits, 'restriction': restrictions}
         raise AssertionError('Search visit target timed out')
 
-    @staticmethod
-    def check_moves(result: dict, restrictions: str, allowed: set[str] | None,
-                    forbidden: set[str] | None):
-        if allowed is not None:
-            assert set(result['moves']) <= allowed, (restrictions, result)
-        if forbidden is not None:
-            assert not set(result['moves']) & forbidden, (restrictions, result)
-
-    def bounded_search(self, restrictions: str, reuse: bool = True) -> dict:
+    def bounded_search(self, restrictions: str, reuse: bool = True, *,
+                       allowed: set[str] | None = None, forbidden: set[str] | None = None) -> dict:
         self.last = None
+        checks = ReportChecks(restrictions, allowed=allowed, forbidden=forbidden)
         self.command(f'kata-search_analyze {self.player} interval 1 rootInfo true pvEdgeVisits true minmoves 30 '
                      + ('ownership true movesOwnership true ' if self.ownership else '')
-                     + ('reuseRootTree true ' if reuse else '') + restrictions)
+                     + ('reuseRootTree true ' if reuse else '') + restrictions, checks=checks)
         assert self.last is not None, ('Missing bounded analysis', restrictions)
         return {**self.last, 'restriction': f'bounded {restrictions}'}
 
@@ -355,9 +366,8 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
                 ('nonrepresentative', f'avoid {active} {duplicate} 1', {duplicate}),
                 ('clear-nonrepresentative', '', set()),
             ]:
-                current = probe.bounded_search(restrictions)
+                current = probe.bounded_search(restrictions, forbidden=forbidden)
                 assert current['visits'] >= previous['visits'] + VISIT_BUDGET, (label, previous, current)
-                assert not set(current['moves']) & forbidden, (label, current)
                 aliases = {move: detail['isSymmetryOf']
                            for move, detail in current['moveDetails'].items()
                            if detail.get('isSymmetryOf') in original_representatives}
@@ -372,9 +382,8 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
                 previous = current
             # A real representative change still disables pruning and retains the hidden
             # child. Clearing its restriction must restore its accumulated edge visits.
-            changed = probe.bounded_search(f'avoid {active} {representative} 1')
+            changed = probe.bounded_search(f'avoid {active} {representative} 1', forbidden={representative})
             assert changed['visits'] >= previous['visits'] + VISIT_BUDGET, changed
-            assert representative not in changed['moves'], changed
             assert all('isSymmetryOf' not in detail for detail in changed['moveDetails'].values()), changed
             results.append({**changed, 'symmetryTransition': 'representative-change'})
             restored_symmetric = probe.bounded_search('')
@@ -490,7 +499,7 @@ def run(executable: Path, model: Path, output: Path, player: str = "B", threads:
             probe.command('clear_cache')
             bounded = []
             for move in ['D4', 'F6']:
-                bounded.append(probe.bounded_search(f'allow b {move} 1 allow w {move} 1'))
+                bounded.append(probe.bounded_search(f'allow b {move} 1 allow w {move} 1', allowed={move}))
             assert bounded[0]['visits'] >= VISIT_BUDGET, bounded
             assert bounded[1]['visits'] == bounded[0]['visits'], bounded
             assert bounded[1]['moves'].get('F6', 0) == 0, bounded

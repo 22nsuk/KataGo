@@ -37,7 +37,8 @@ struct EvalCacheTable {
   // These are all thread-safe, and EvalCacheEntry is only ever updated via replacement, not mutation
   // similar to nnevals.
   std::shared_ptr<EvalCacheEntry> find(Hash128 graphHash);
-  void update(Hash128 graphHash, const SearchNode* node, int64_t evalCacheMinVisits, bool isRootNode);
+  // Restricted root aggregates are not general position evaluations; child evals remain reusable.
+  void update(Hash128 graphHash, const SearchNode* node, int64_t evalCacheMinVisits, bool isRootNode, bool canRecordAggregate);
   void clear();
 };
 
