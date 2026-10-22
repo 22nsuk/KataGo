@@ -46,7 +46,7 @@ std::shared_ptr<EvalCacheEntry> EvalCacheTable::find(Hash128 graphHash) {
   return iter->second;
 }
 
-void EvalCacheTable::update(Hash128 graphHash, const SearchNode* node, int64_t evalCacheMinVisits, bool isRootNode) {
+void EvalCacheTable::update(Hash128 graphHash, const SearchNode* node, int64_t evalCacheMinVisits, bool isRootNode, bool canRecordAggregate) {
   uint32_t subMapIdx = (uint32_t)(graphHash.hash0 % entries.size());
   std::mutex& mutex = mutexPool->getMutex(subMapIdx);
 
@@ -94,8 +94,8 @@ void EvalCacheTable::update(Hash128 graphHash, const SearchNode* node, int64_t e
 
   // Should we record this node's aggregate evals in the cache?
   // Or should we only leave it at recording initial first-play evals for exploring children?
-  bool shouldRecordEvals = true;
-  if(isRootNode) {
+  bool shouldRecordEvals = canRecordAggregate;
+  if(shouldRecordEvals && isRootNode) {
     // On the root node, due to it handling passing differently than other nodes, we do NOT record it if passing
     // is near the highest utility move or is a decent fraction of the visits.
     int64_t totalEdgeVisits = 0;

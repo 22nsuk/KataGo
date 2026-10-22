@@ -585,6 +585,122 @@ static void runRootReuseFutilePruningTests(const string& modelFile, Logger& logg
   delete nnEval;
 }
 
+static void runRootReuseEvalCacheTests(const string& modelFile, Logger& logger) {
+  NNEvaluator* nnEval = startNNEval(modelFile,logger,"root-reuse-cache",9,9,0,true,false,false,true,false);
+  for(Player pla: {P_BLACK,P_WHITE}) {
+    for(bool reuse: {true,false}) {
+      for(bool hasPrior: {true,false}) {
+        SearchParams params;
+        params.maxPlayouts = 64;
+        params.numThreads = 1;
+        params.useGraphSearch = true;
+        params.useEvalCache = true;
+        params.evalCacheMinVisits = 8;
+        params.rootSymmetryPruning = false;
+        params.useNoisePruning = false;
+        params.useUncertainty = false;
+        params.valueWeightExponent = 0.0;
+        Search search(params,nnEval,&logger,"root-reuse-cache");
+        Board base(9,9);
+        BoardHistory baseHist(base,getOpp(pla),Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+        Board board = base;
+        BoardHistory hist = baseHist;
+        const Loc entryMove = Location::ofString("D4",board);
+        hist.makeBoardMoveAssumeLegal(board,entryMove,getOpp(pla),NULL);
+        search.setPosition(pla,board,hist);
+        const Loc hiddenMove = Location::ofString("F6",board);
+        const Loc newMove = Location::ofString("C3",board);
+        vector<int> inactiveMask(Board::MAX_ARR_SIZE,0);
+        inactiveMask[Board::PASS_LOC] = 1;
+        auto setMask = [&](const vector<int>& mask, bool retain) {
+          search.setAvoidMoveUntilByLoc(pla == P_BLACK ? mask : inactiveMask,
+                                       pla == P_WHITE ? mask : inactiveMask,retain);
+        };
+        vector<int> mask(Board::MAX_ARR_SIZE,1);
+        mask[hiddenMove] = 0;
+        setMask(mask,true);
+        search.runWholeSearch(pla);
+        const Hash128 key = search.rootGraphHash ^ search.evalCacheParamsHash;
+        // An unrestricted root must still record its aggregate, even with an
+        // inactive-color restriction and a sticky root-reuse flag.
+        std::function<bool()> stopNow = []() noexcept { return true; };
+        if(hasPrior) {
+          setMask({},true);
+          search.runWholeSearch(pla,&stopNow);
+        }
+        else
+          search.evalCache->clear();
+        auto prior = search.evalCache->find(key);
+        testAssert(hasPrior ? prior != nullptr && prior->cacheWeight > 0 : prior == nullptr);
+        const int64_t retainedVisits = search.getRootVisits();
+        mask[hiddenMove] = 1;
+        mask[newMove] = 0;
+        setMask(mask,reuse);
+        std::function<bool()> stopAfterOne = [&]() { return search.getRootVisits() >= 1; };
+        search.runWholeSearch(pla,&stopAfterOne);
+        testAssert(search.lastSearchNumPlayouts == (reuse ? 0 : 1));
+        testAssert(search.getRootVisits() == (reuse ? retainedVisits : 1));
+        auto checkAggregate = [&]() {
+          auto entry = search.evalCache->find(key);
+          if(hasPrior) {
+            testAssert(entry != nullptr);
+            testAssert(entry->cacheWeight == prior->cacheWeight);
+            testAssert(entry->avgWinLoss == prior->avgWinLoss);
+            testAssert(entry->avgNoResult == prior->avgNoResult);
+            testAssert(entry->avgScoreMean == prior->avgScoreMean);
+            testAssert(entry->avgLead == prior->avgLead);
+          }
+          else
+            testAssert(entry == nullptr || entry->cacheWeight == 0.0f);
+        };
+        checkAggregate();
+        // New work under the restriction may add valid child evaluations, but
+        // cannot publish the restricted root aggregate under the ordinary key.
+        search.runWholeSearch(pla);
+        checkAggregate();
+        auto entry = search.evalCache->find(key);
+        testAssert(entry != nullptr && contains(entry->firstExploreEvals,newMove));
+        testAssert(entry->firstExploreEvals.at(newMove).cacheWeight >= params.evalCacheMinVisits);
+        const SearchNode* newChild = search.getChildForMove(search.rootNode,newMove);
+        auto childEntry = search.evalCache->find(newChild->graphHash ^ search.evalCacheParamsHash);
+        testAssert(childEntry != nullptr && childEntry->cacheWeight > 0);
+
+        // Reach the same position below another root and consume the shared cache
+        // through normal NN initialization, rather than only inspecting its record.
+        Search consumer(params,nnEval,&logger,"root-reuse-cache-consumer");
+        consumer.setExternalEvalCache(search.evalCache);
+        consumer.setPosition(getOpp(pla),base,baseHist);
+        vector<int> entryMask(Board::MAX_ARR_SIZE,1);
+        entryMask[entryMove] = 0;
+        consumer.setAvoidMoveUntilByLoc(pla == P_WHITE ? entryMask : vector<int>(),
+                                       pla == P_BLACK ? entryMask : vector<int>());
+        std::function<bool()> stopAfterTwo = [&]() { return consumer.getRootVisits() >= 2; };
+        consumer.runWholeSearch(getOpp(pla),&stopAfterTwo);
+        const SearchNode* child = consumer.getChildForMove(consumer.rootNode,entryMove);
+        testAssert(child != nullptr && child->evalCacheEntry == entry);
+        double rawWinLoss = child->getNNOutput()->whiteWinProb - child->getNNOutput()->whiteLossProb;
+        double winLoss = child->stats.winLossValueAvg.load();
+        if(hasPrior) {
+          testAssert(abs(rawWinLoss - prior->avgWinLoss) > 1e-6);
+          testAssert(abs(winLoss - prior->avgWinLoss) < abs(rawWinLoss - prior->avgWinLoss));
+        }
+        else
+          testAssert(abs(winLoss - rawWinLoss) < 1e-6);
+
+        // Empty and all-zero active masks both restore aggregate recording.
+        for(bool emptyMask: {false,true}) {
+          setMask(emptyMask ? vector<int>() : vector<int>(Board::MAX_ARR_SIZE,0),true);
+          search.runWholeSearch(pla,&stopNow);
+          auto restored = search.evalCache->find(key);
+          testAssert(restored != nullptr && restored->cacheWeight == search.getRootVisits());
+          testAssert(restored->avgWinLoss == (float)search.rootNode->stats.winLossValueAvg.load());
+        }
+      }
+    }
+  }
+  delete nnEval;
+}
+
 void Tests::runNNLessSearchTests() {
   cout << "Running neuralnetless search tests" << endl;
   NeuralNet::globalInitialize();
@@ -599,6 +715,7 @@ void Tests::runNNLessSearchTests() {
   logger.addOStream(cout);
   runRootReuseInvariantTests(modelFile,logger);
   runRootReuseFutilePruningTests(modelFile,logger);
+  runRootReuseEvalCacheTests(modelFile,logger);
 
   {
     cout << "===================================================================" << endl;

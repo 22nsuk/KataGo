@@ -73,6 +73,13 @@ such as a position/player change, different search settings that require clearin
 komi/rule changes, and `clear_cache` still apply. Each request specifies the complete
 desired restriction; omitted restrictions clear that player's previous mask.
 
+With `useGraphSearch` and `useEvalCache` enabled, a root with a current-player
+restriction does not write its aggregate evaluation into the shared position cache.
+An earlier unrestricted aggregate remains available to later searches. Child and
+descendant evaluations remain cacheable under first-ply restrictions. Clearing the
+active mask restores ordinary root aggregate recording; first-ply restrictions on
+the other player and all-zero active masks do not suppress it.
+
 ## Search limits
 
 Tree reuse does not change the existing meaning of search limits. `maxVisits` counts
@@ -117,8 +124,10 @@ checks, acknowledged `quit`, zero process exit, reader shutdown, and log writes 
 Failed runs do not have a new PASS result. The result records the engine, model, and
 configuration SHA-256 hashes along with the engine version and test options; these
 identify the tested inputs but are not a GPU performance or strength certification.
-The final report drained by the stop barrier is checked for masked moves and visit
-continuity as well as the earlier streamed reports. The probe checks the
+Every report consumed during a search is checked for visit continuity and the
+case's allowed/forbidden moves, including intermediate reports during the start
+acknowledgement and stop barrier. Bounded searches use the same validation path.
+The probe checks the
 capability, allow/avoid/clear transitions, per-color masks, retained visits, reallowed
 children, mixed retained/new candidates, first-request symmetry pruning, low-policy
 moves, pass, excluded focus targets, deeper restriction invalidation, default legacy
@@ -129,7 +138,10 @@ fresh counted visits, unchanged-mask restarts, per-request playout budgets, the 
 workflow tests both colors with one and four threads and additional capped searches.
 Equivalent-mask cap regressions cover both colors, one/four threads, tree search,
 graph search with eval cache, preserved snapshots, in-progress cap intervals, and
-legacy/deeper invalidation. GTP checks exercise empty-list and inactive-color requests
+legacy/deeper invalidation. Cache regressions also consume a restricted position's
+shared entry below another root, check preservation of unrestricted aggregates and
+valid child records, and restore aggregate recording after clearing the mask.
+GTP checks exercise empty-list and inactive-color requests
 as well as komi, rule, and player invalidation of a warmed tree.
 Symmetry regressions cover pass-only and inactive-color restrictions, excluding a
 nonrepresentative, equivalent empty/all-zero masks, retained children and visits,
