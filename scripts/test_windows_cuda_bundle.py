@@ -1,9 +1,11 @@
 """Regression checks for immutable inputs, Windows dependency closure and ZIP provenance."""
 
 import copy
+from contextlib import ExitStack
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -172,6 +174,112 @@ class ArchiveTests(unittest.TestCase):
         receipt["files"] = [r for r in receipt["files"] if r["file"] != "default_gtp.cfg"]
         with self.assertRaisesRegex(ValueError, "incomplete"):
             bundle.verify_archive(self.write(receipt), self.target, self.sha)
+
+
+class BuildReceiptTests(unittest.TestCase):
+    """Exercise real packaging and receipts with the native toolchain stubbed."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.source = self.root / "source"
+        self.prefix = self.root / "sdk"
+        self.sha = "a" * 40
+        self.target = "windows-nvidia-cuda13"
+        lock = sdk.load_lock(self.target)
+        for name in ("LICENSE", "cpp/configs/gtp_example.cfg", "cpp/configs/analysis_example.cfg"):
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture", encoding="utf-8")
+        for name in ["share/licenses/LICENSE", *("runtime/" + name for name in lock["runtimeFiles"])]:
+            path = self.prefix / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture")
+        receipt = dict(status="PASS", target=self.target, lockSha256=sdk.digest(sdk.PROFILES[self.target]),
+                       files=sdk.inventory(self.prefix), msvcToolset="14.44", windowsSdk="fixture",
+                       nvccVersionOutput="fixture")
+        (self.prefix / "sdk-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+
+    def run_tool(self, command, **kwargs):
+        if command[0] == "cmake":
+            if command[1] == "--build":
+                build = Path(command[2])
+                compiler = build / "CMakeFiles/3.31.6/CMakeCXXCompiler.cmake"
+                compiler.parent.mkdir(parents=True)
+                compiler.write_text('set(CMAKE_CXX_COMPILER_ID "MSVC")\n'
+                                    'set(CMAKE_CXX_COMPILER_VERSION "19.44")\n'
+                                    'set(CMAKE_CXX_COMPILER "cl.exe")\n', encoding="utf-8")
+                (build / "katago.exe").write_bytes(b"fixture executable")
+            return subprocess.CompletedProcess(command, 0)
+        self.assertEqual(Path(command[0]).name, "katago.exe")
+        self.assertIn(command[1], ("version", "runtests", "runoutputtests"))
+        return subprocess.CompletedProcess(command, 0, stdout=f"Git revision: {self.sha}\nUsing CUDA backend\n")
+
+    def tool_output(self, command, **kwargs):
+        if command[:2] == ["dumpbin", "/headers"]:
+            return "8664 machine (x64)\n"
+        if command[:2] == ["dumpbin", "/dependents"]:
+            return "    KERNEL32.dll\n"
+        self.assertIn(command, (["cmake", "--version"], ["ninja", "--version"]))
+        return "fixture version\n"
+
+    def run_build(self, output):
+        with (patch.object(bundle, "source_check"), patch.object(sdk, "host_check"),
+              patch.dict(os.environ, {"SYSTEMROOT": str(self.root / "Windows")}),
+              patch.object(bundle.subprocess, "run", side_effect=self.run_tool),
+              patch.object(bundle.subprocess, "check_output", side_effect=self.tool_output)):
+            return bundle.build(self.source, output, self.root / "cache", self.target, self.sha, 2, self.prefix)
+
+    def test_success_agrees_across_receipts_archive_and_summary(self):
+        output = self.root / "success"
+        summary = self.run_build(output)
+        receipt = json.loads((output / "source-package.json").read_text(encoding="utf-8"))
+        self.assertEqual(receipt["packagingStatus"], "PASS")
+        self.assertNotIn("error", receipt)
+        self.assertEqual(receipt["hardwareAcceptanceStatus"], "PENDING_HARDWARE")
+        archive = output / summary["archive"]["file"]
+        self.assertEqual(bundle.verify_archive(archive, self.target, self.sha), receipt)
+        metadata = output / "release/source-release.json"
+        self.assertEqual(json.loads(metadata.read_text(encoding="utf-8")), receipt)
+        self.assertEqual(summary["archive"], sdk.record(archive, output))
+        self.assertEqual(summary["sourceMetadata"], sdk.record(metadata, metadata.parent))
+        self.assertEqual(json.loads((output / "artifact-summary.json").read_text(encoding="utf-8")), summary)
+
+    def test_packaging_failures_never_leave_a_pass_receipt(self):
+        for stage in ("copy_licenses", "seal_archive", "verify_archive", "source-release.json", "artifact-summary.json"):
+            with self.subTest(stage=stage), ExitStack() as failure:
+                output = self.root / stage
+                message = "injected " + stage + " failure"
+                if stage.endswith(".json"):
+                    write_text = Path.write_text
+
+                    def fail_write(path, *args, **kwargs):
+                        if path.name == stage:
+                            raise OSError(message)
+                        return write_text(path, *args, **kwargs)
+
+                    failure.enter_context(patch.object(Path, "write_text", fail_write))
+                else:
+                    failure.enter_context(patch.object(bundle, stage, side_effect=OSError(message)))
+                with self.assertRaisesRegex(OSError, message):
+                    self.run_build(output)
+                receipt = json.loads((output / "source-package.json").read_text(encoding="utf-8"))
+                self.assertEqual(receipt["packagingStatus"], "FAIL")
+                self.assertEqual(receipt["buildStatus"], "PASS")
+                self.assertEqual(receipt["dependencyAuditStatus"], "PASS")
+                self.assertEqual(receipt["error"], message)
+                self.assertFalse((output / "artifact-summary.json").exists())
+
+    def test_build_failure_leaves_packaging_not_run(self):
+        output = self.root / "build-failure"
+        with patch.object(self, "run_tool", side_effect=OSError("injected build failure")):
+            with self.assertRaisesRegex(OSError, "injected build failure"):
+                self.run_build(output)
+        receipt = json.loads((output / "source-package.json").read_text(encoding="utf-8"))
+        self.assertEqual(receipt["buildStatus"], "FAIL")
+        self.assertEqual(receipt["packagingStatus"], "NOT_RUN")
+        self.assertEqual(receipt["dependencyAuditStatus"], "NOT_RUN")
 
 
 if __name__ == "__main__":

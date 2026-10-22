@@ -197,28 +197,32 @@ def build(source: Path, output: Path, cache: Path, target: str, source_sha: str,
             with (output / (command + ".log")).open("w", encoding="utf-8") as log:
                 subprocess.run([str(portable / "katago.exe"), command], check=True, cwd=source / "cpp",
                                env=portable_environment(), stdout=log, stderr=subprocess.STDOUT, timeout=600)
+        receipt.update(buildStatus="PASS", dependencyAuditStatus="PASS",
+                       nativeTests={"runtests": "PASS", "runoutputtests": "PASS"}, versionOutput=version,
+                       peAudit=audits, auditedRuntimeFiles=[sdk.record(portable / n, portable) for n in lock["runtimeFiles"]])
+        receipt["packagingStatus"] = "FAIL"
         bundle = output / "release"
         bundle.mkdir()
         shutil.copy2(portable / "katago.exe", bundle / "katago.exe")
         shutil.copy2(source / "cpp/configs/gtp_example.cfg", bundle / "default_gtp.cfg")
         shutil.copy2(source / "cpp/configs/analysis_example.cfg", bundle / "analysis_example.cfg")
         copy_licenses(source, prefix, bundle)
-        receipt.update(buildStatus="PASS", packagingStatus="PASS", dependencyAuditStatus="PASS",
-                       nativeTests={"runtests": "PASS", "runoutputtests": "PASS"}, versionOutput=version,
-                       executable=sdk.record(bundle / "katago.exe", bundle), files=sdk.inventory(bundle),
-                       peAudit=audits, auditedRuntimeFiles=[sdk.record(portable / n, portable) for n in lock["runtimeFiles"]])
+        receipt.update(executable=sdk.record(bundle / "katago.exe", bundle), files=sdk.inventory(bundle))
+        # Keep release metadata separate until every packaging step succeeds.
+        release_receipt = dict(receipt, packagingStatus="PASS")
         name = f"katago-source-{source_sha[:12]}-{target}.zip"
         archive = output / name
-        seal_archive(archive, bundle, receipt)
+        seal_archive(archive, bundle, release_receipt)
         verify_archive(archive, target, source_sha)
         metadata_file = bundle / "source-release.json"
-        metadata_file.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+        metadata_file.write_text(json.dumps(release_receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         summary = dict(sourceCommit=source_sha, sourceRepository=SOURCE_REPOSITORY, target=target,
                        runtimeProfile=lock["runtimeProfile"], archive=sdk.record(archive, output),
                        executable=receipt["executable"], sourceMetadata=sdk.record(metadata_file, bundle),
                        hardwareAcceptanceStatus=receipt["hardwareAcceptanceStatus"],
                        releaseTag="kg-next-" + source_sha[:12])
         (output / "artifact-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        receipt["packagingStatus"] = "PASS"
         return summary
     except Exception as error:
         receipt["error"] = str(error)
