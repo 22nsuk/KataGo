@@ -491,6 +491,100 @@ static void runRootReuseInvariantTests(const string& modelFile, Logger& logger) 
 }
 
 
+static void runRootReuseFutilePruningTests(const string& modelFile, Logger& logger) {
+  NNEvaluator* nnEval = startNNEval(modelFile,logger,"root-reuse-futile",9,9,0,true,false,false,true,false);
+  Board board(9,9);
+  // The last case must still prune: the allowed child itself has too many visits
+  // for a new candidate to catch up within this request's budget.
+  const pair<int,int> warmups[] = {{1,1},{10,1},{1,10}};
+  for(Player pla: {P_BLACK,P_WHITE}) {
+    for(bool useGraphSearch: {false,true}) {
+      for(int numThreads: {1,4}) {
+        for(double futileThreshold: {0.0,0.2}) {
+          for(const auto& warmup: warmups) {
+            SearchParams params;
+            params.maxPlayouts = 32;
+            params.numThreads = numThreads;
+            params.useGraphSearch = useGraphSearch;
+            params.rootSymmetryPruning = false;
+            params.useNoisePruning = false;
+            params.useUncertainty = false;
+            params.valueWeightExponent = 0.0;
+            params.futileVisitsThreshold = futileThreshold;
+            Search search(params,nnEval,&logger,"root-reuse-futile");
+            BoardHistory hist(board,pla,Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+            search.setPosition(pla,board,hist);
+            const Loc hiddenMove = Location::ofString("D4",board);
+            const Loc keptMove = Location::ofString("F6",board);
+            const Loc newMove = Location::ofString("C3",board);
+            auto allow = [&](const vector<Loc>& moves) {
+              vector<int> mask(Board::MAX_ARR_SIZE,1);
+              for(Loc move: moves)
+                mask[move] = 0;
+              search.setAvoidMoveUntilByLoc(pla == P_BLACK ? mask : vector<int>(),
+                                           pla == P_WHITE ? mask : vector<int>(),true);
+            };
+            auto runBounded = [&]() {
+              int64_t before = search.getRootVisits();
+              search.runWholeSearch(pla);
+              testAssert(search.lastSearchNumPlayouts >= params.maxPlayouts);
+              testAssert(search.lastSearchNumPlayouts <= params.maxPlayouts + numThreads - 1);
+              testAssert(search.getRootVisits() == before + search.lastSearchNumPlayouts);
+            };
+            auto edgeVisits = [&](Loc move) {
+              auto children = search.rootNode->getChildren();
+              for(int i = 0; i<children.getCapacity() && children[i].getIfAllocated() != NULL; i++) {
+                if(children[i].getMoveLoc() == move)
+                  return children[i].getEdgeVisits();
+              }
+              return (int64_t)0;
+            };
+            allow({hiddenMove});
+            for(int i = 0; i<warmup.first; i++)
+              runBounded();
+            SearchNode* retainedRoot = search.rootNode;
+            const int64_t hiddenVisits = edgeVisits(hiddenMove);
+            allow({keptMove});
+            for(int i = 0; i<warmup.second; i++)
+              runBounded();
+            testAssert(search.rootNode == retainedRoot);
+            testAssert(edgeVisits(hiddenMove) == hiddenVisits);
+            const int64_t keptVisits = edgeVisits(keptMove);
+            allow({keptMove,newMove});
+            search.beginSearch(false);
+            // Make the new candidate clearly preferable without depending on the
+            // NN-less evaluator's random policy. Visits and weights remain real.
+            float* policy = retainedRoot->getNNOutput()->getPolicyProbsMaybeNoised();
+            const vector<float> originalPolicy(policy,policy + search.policySize);
+            for(int i = 0; i<search.policySize; i++)
+              if(policy[i] >= 0)
+                policy[i] = 0.0f;
+            policy[search.getPos(keptMove)] = 0.01f;
+            policy[search.getPos(newMove)] = 0.99f;
+            runBounded();
+            testAssert(search.rootNode == retainedRoot);
+            testAssert(edgeVisits(hiddenMove) == hiddenVisits);
+            testAssert(edgeVisits(keptMove) >= keptVisits);
+            if(futileThreshold > 0.0 && warmup.second == 10)
+              testAssert(edgeVisits(newMove) == 0);
+            else
+              testAssert(edgeVisits(newMove) > 0);
+            std::copy(originalPolicy.begin(),originalPolicy.end(),retainedRoot->getNNOutput()->getPolicyProbsMaybeNoised());
+            // Clearing the mask restores the hidden child without losing its visits.
+            search.setAvoidMoveUntilByLoc({}, {}, true);
+            const int64_t visits = search.getRootVisits();
+            search.beginSearch(false);
+            testAssert(search.rootNode == retainedRoot && search.getRootVisits() == visits);
+            testAssert(edgeVisits(hiddenMove) == hiddenVisits);
+            testAssert(!search.isReuseExcludedRootMove(hiddenMove));
+          }
+        }
+      }
+    }
+  }
+  delete nnEval;
+}
+
 void Tests::runNNLessSearchTests() {
   cout << "Running neuralnetless search tests" << endl;
   NeuralNet::globalInitialize();
@@ -504,6 +598,7 @@ void Tests::runNNLessSearchTests() {
   Logger logger(nullptr, logToStdout, logToStderr, logTime);
   logger.addOStream(cout);
   runRootReuseInvariantTests(modelFile,logger);
+  runRootReuseFutilePruningTests(modelFile,logger);
 
   {
     cout << "===================================================================" << endl;
