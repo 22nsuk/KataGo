@@ -3,11 +3,13 @@
 PyYAML is pinned in the lightweight plan job. BaseLoader avoids YAML 1.1 treating
 GitHub's `on` key as a boolean. This is not a replacement for actionlint or CI.
 """
+import ast
 from pathlib import Path
 import re
 import unittest
 
 import yaml
+import ci_scope
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,8 +19,44 @@ def load(path):
 
 
 class PolicyTests(unittest.TestCase):
+    def cuda_runs(self, event, result, output, cancelled=False):
+        # Evaluate the actual YAML condition for fixed lowercase string/boolean
+        # inputs; this deliberately does not emulate the full Actions runtime.
+        condition = load('.github/workflows/ci.yml')['jobs']['cuda']['if']
+        self.assertIn('cancelled()', condition, 'Keep the explicit status check after plan failure')
+        expression = condition.removeprefix('${{').removesuffix('}}')
+        for token, value in {'github.event_name': event, 'needs.plan.result': result,
+                             'needs.plan.outputs.cuda': output, 'cancelled()': cancelled}.items():
+            expression = expression.replace(token, repr(value))
+        expression = expression.replace('&&', ' and ').replace('||', ' or ')
+        expression = re.sub(r'!(?!=)', ' not ', expression).strip()
+        tree = ast.parse(expression, mode='eval')
+        for node in ast.walk(tree):
+            self.assertIsInstance(node, (ast.Expression, ast.BoolOp, ast.And, ast.Or,
+                                         ast.UnaryOp, ast.Not, ast.Compare, ast.Eq,
+                                         ast.NotEq, ast.Constant))
+        return eval(compile(tree, '<cuda job condition>', 'eval'), {'__builtins__': {}})
+
+    def test_cuda_never_runs_on_push_even_when_plan_fails(self):
+        for result in ('success', 'failure', 'cancelled', 'skipped'):
+            for output in ('true', 'false', ''):
+                for cancelled in (False, True):
+                    with self.subTest(result=result, output=output, cancelled=cancelled):
+                        self.assertFalse(self.cuda_runs('push', result, output, cancelled))
+
+    def test_cuda_pr_and_manual_runs_keep_selection_fallback_and_cancellation(self):
+        cases = (('success', 'true', True), ('success', 'false', False),
+                 ('success', '', True), ('failure', '', True),
+                 ('failure', 'false', True), ('cancelled', '', True), ('skipped', '', True))
+        for event in ('pull_request', 'workflow_dispatch'):
+            for result, output, expected in cases:
+                with self.subTest(event=event, result=result, output=output):
+                    self.assertEqual(self.cuda_runs(event, result, output), expected)
+                    self.assertFalse(self.cuda_runs(event, result, output, cancelled=True))
+
     def test_only_superseded_pr_runs_share_a_cancellation_group(self):
-        for name in ('build', 'kg-root-reuse', 'windows-cuda-bundles', 'onnx-backend', 'python-board'):
+        groups = set()
+        for name in ('ci', 'build', 'kg-root-reuse', 'windows-cuda-bundles', 'onnx-backend', 'python-board'):
             with self.subTest(workflow=name):
                 concurrency = load(f'.github/workflows/{name}.yml')['concurrency']
                 group = concurrency['group']
@@ -26,22 +64,45 @@ class PolicyTests(unittest.TestCase):
                 self.assertIn('github.event_name', group)
                 self.assertIn('github.event.pull_request.number || github.run_id', group)
                 self.assertEqual(concurrency['cancel-in-progress'], "${{ github.event_name == 'pull_request' }}")
+                self.assertNotIn(group, groups, 'Reusable workflows must not cancel their caller or siblings')
+                groups.add(group)
 
     def test_board_workflow_scopes_conftests_to_test_ancestors(self):
-        workflow = load('.github/workflows/python-board.yml')
         test_file = Path('python/tests/test_board_zobrist.py')
         expected = {(parent / 'conftest.py').as_posix() for parent in test_file.parents}
-        for event in ('push', 'pull_request'):
-            with self.subTest(event=event):
-                paths = workflow['on'][event]['paths']
-                self.assertIn(test_file.as_posix(), paths)
-                self.assertEqual({path for path in paths if path.endswith('conftest.py')}, expected)
+        self.assertIn(test_file.as_posix(), ci_scope.BOARD_PATHS)
+        self.assertEqual({path for path in ci_scope.BOARD_PATHS if path.endswith('conftest.py')}, expected)
+
+    def test_ci_entrypoint_and_required_gate_cannot_silently_skip_checks(self):
+        workflow = load('.github/workflows/ci.yml')
+        for event in ('pull_request', 'push'):
+            self.assertEqual(workflow['on'][event], {'branches': ['master']})
+        jobs = workflow['jobs']
+        gate = jobs['ci-required']
+        self.assertEqual(gate['name'], 'ci-required')
+        self.assertEqual(gate['if'], '${{ always() }}')
+        self.assertEqual(set(gate['needs']), set(jobs) - {'ci-required'})
+        step = gate['steps'][-1]
+        self.assertEqual(step['env']['CI_NEEDS'], '${{ toJSON(needs) }}')
+        self.assertEqual(step['run'], 'python3 -B scripts/ci_gate.py')
+        self.assertNotIn('continue-on-error', gate)
+        self.assertNotIn('continue-on-error', step)
+        for job, file in {'general': 'build', 'engine': 'kg-root-reuse', 'onnx': 'onnx-backend',
+                          'cuda': 'windows-cuda-bundles', 'board': 'python-board'}.items():
+            self.assertEqual(jobs[job]['uses'], f'./.github/workflows/{file}.yml')
+            self.assertEqual(jobs[job]['needs'], 'plan')
+            child = load(f'.github/workflows/{file}.yml')
+            self.assertEqual(set(child['on']), {'workflow_call', 'workflow_dispatch'})
+            if job != 'general':
+                event_guard = "github.event_name != 'push' && " if job == 'cuda' else ''
+                self.assertEqual(jobs[job]['if'],
+                                 "${{ !cancelled() && " + event_guard
+                                 + "(needs.plan.result != 'success' || needs.plan.outputs."
+                                 + job + " != 'false') }}")
 
     def test_general_workflow_stays_visible_and_gates_only_native_jobs(self):
         workflow = load('.github/workflows/build.yml')
-        for event in ('push', 'pull_request'):
-            self.assertNotIn('paths', workflow['on'][event])
-            self.assertNotIn('paths-ignore', workflow['on'][event])
+        self.assertIn('workflow_call', workflow['on'])
         jobs = workflow['jobs']
         self.assertEqual(len([name for name in jobs if name.startswith('build-')]), 6)
         plan = jobs['plan']
@@ -70,7 +131,7 @@ class PolicyTests(unittest.TestCase):
         self.assertNotIn('cpp/CMakeFiles', build)
         self.assertNotIn('cpp/.ninja_deps', build)
         root = load('.github/workflows/kg-root-reuse.yml')
-        self.assertIn('.github/actions/ccache/**', root['on']['pull_request']['paths'])
+        self.assertIn('workflow_call', root['on'])
         checks = [s for s in root['jobs']['native-cpu']['steps'] if s.get('name') == 'Check native invariants']
         self.assertIn('runoutputtests', checks[0]['run'])
         self.assertNotIn('if', checks[0])
