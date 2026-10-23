@@ -49,7 +49,7 @@ jobs:
 
   cuda:
     needs: plan
-    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.cuda != 'false') }}
+    if: ${{ !cancelled() && github.event_name != 'push' && (needs.plan.result != 'success' || needs.plan.outputs.cuda != 'false') }}
     uses: ./.github/workflows/windows-cuda-bundles.yml
 
   board:

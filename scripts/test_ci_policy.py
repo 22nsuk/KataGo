@@ -3,6 +3,7 @@
 PyYAML is pinned in the lightweight plan job. BaseLoader avoids YAML 1.1 treating
 GitHub's `on` key as a boolean. This is not a replacement for actionlint or CI.
 """
+import ast
 from pathlib import Path
 import re
 import unittest
@@ -18,6 +19,41 @@ def load(path):
 
 
 class PolicyTests(unittest.TestCase):
+    def cuda_runs(self, event, result, output, cancelled=False):
+        # Evaluate the actual YAML condition for fixed lowercase string/boolean
+        # inputs; this deliberately does not emulate the full Actions runtime.
+        condition = load('.github/workflows/ci.yml')['jobs']['cuda']['if']
+        self.assertIn('cancelled()', condition, 'Keep the explicit status check after plan failure')
+        expression = condition.removeprefix('${{').removesuffix('}}')
+        for token, value in {'github.event_name': event, 'needs.plan.result': result,
+                             'needs.plan.outputs.cuda': output, 'cancelled()': cancelled}.items():
+            expression = expression.replace(token, repr(value))
+        expression = expression.replace('&&', ' and ').replace('||', ' or ')
+        expression = re.sub(r'!(?!=)', ' not ', expression).strip()
+        tree = ast.parse(expression, mode='eval')
+        for node in ast.walk(tree):
+            self.assertIsInstance(node, (ast.Expression, ast.BoolOp, ast.And, ast.Or,
+                                         ast.UnaryOp, ast.Not, ast.Compare, ast.Eq,
+                                         ast.NotEq, ast.Constant))
+        return eval(compile(tree, '<cuda job condition>', 'eval'), {'__builtins__': {}})
+
+    def test_cuda_never_runs_on_push_even_when_plan_fails(self):
+        for result in ('success', 'failure', 'cancelled', 'skipped'):
+            for output in ('true', 'false', ''):
+                for cancelled in (False, True):
+                    with self.subTest(result=result, output=output, cancelled=cancelled):
+                        self.assertFalse(self.cuda_runs('push', result, output, cancelled))
+
+    def test_cuda_pr_and_manual_runs_keep_selection_fallback_and_cancellation(self):
+        cases = (('success', 'true', True), ('success', 'false', False),
+                 ('success', '', True), ('failure', '', True),
+                 ('failure', 'false', True), ('cancelled', '', True), ('skipped', '', True))
+        for event in ('pull_request', 'workflow_dispatch'):
+            for result, output, expected in cases:
+                with self.subTest(event=event, result=result, output=output):
+                    self.assertEqual(self.cuda_runs(event, result, output), expected)
+                    self.assertFalse(self.cuda_runs(event, result, output, cancelled=True))
+
     def test_only_superseded_pr_runs_share_a_cancellation_group(self):
         groups = set()
         for name in ('ci', 'build', 'kg-root-reuse', 'windows-cuda-bundles', 'onnx-backend', 'python-board'):
@@ -58,8 +94,10 @@ class PolicyTests(unittest.TestCase):
             child = load(f'.github/workflows/{file}.yml')
             self.assertEqual(set(child['on']), {'workflow_call', 'workflow_dispatch'})
             if job != 'general':
+                event_guard = "github.event_name != 'push' && " if job == 'cuda' else ''
                 self.assertEqual(jobs[job]['if'],
-                                 "${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs."
+                                 "${{ !cancelled() && " + event_guard
+                                 + "(needs.plan.result != 'success' || needs.plan.outputs."
                                  + job + " != 'false') }}")
 
     def test_general_workflow_stays_visible_and_gates_only_native_jobs(self):

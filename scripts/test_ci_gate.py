@@ -33,6 +33,13 @@ class GateTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         ci_gate.validate(needs)
 
+    def test_failed_push_plan_still_fails_when_cuda_is_skipped(self):
+        needs = completed()
+        needs['plan'] = {'result': 'failure', 'outputs': {}}
+        needs['cuda']['result'] = 'skipped'
+        with self.assertRaisesRegex(ValueError, 'CI scope selection did not succeed'):
+            ci_gate.validate(needs)
+
     def test_only_explicitly_unselected_jobs_may_be_skipped(self):
         for job in ('engine', 'onnx', 'cuda', 'board'):
             with self.subTest(job=job):
