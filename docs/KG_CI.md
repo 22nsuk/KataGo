@@ -10,7 +10,7 @@
 | 워크플로 | 자동 실행 | 수동 실행과 검증 범위 |
 | --- | --- | --- |
 | Build and Test | `master` push와 PR. 가벼운 `plan` 검사는 항상 실행하며, 문서만 바뀐 것이 확인될 때에만 6개 플랫폼 빌드를 건너뜁니다. | 전체 플랫폼 빌드. OpenCL·Metal·ROCm 컴파일과 `runtests`이며 GPU 실기 승인이 아닙니다. |
-| Root tree reuse | 기존 C++·probe·Fox 회귀 경로와 공용 ccache action 변경 PR | Eigen 빌드, 네이티브 테스트, 실제 GTP 6조합, Fox 변환 검증을 모두 실행합니다. |
+| Root tree reuse | 기존 C++·probe·GTP 출력 필터·Fox 회귀 경로와 공용 ccache action 변경 PR | Eigen 빌드, 네이티브 테스트, 루트 재사용 GTP 6조합, 분석 출력 필터 72조합, Fox 변환 검증을 모두 실행합니다. |
 | ONNX backend build & test | 기존 C++·ONNX 워크플로·공용 action 변경의 PR와 `master` push | 기본은 CPU·DirectML 3조합만 실행합니다. `include_slow=true`를 명시해야 OpenVINO·TensorRT의 ORT 소스 빌드도 실행합니다. |
 | Windows CUDA source bundles | 기존 C++·번들 스크립트·잠금 파일 변경 PR | CUDA 12·13 프로필을 모두 빌드·검사합니다. 별도 릴리스 발행이나 GPU 승인은 하지 않습니다. |
 | Python board regressions | `python/katago/game/**`, `python/tests/test_board_zobrist.py`, pytest 설정, 이 워크플로 변경의 `master` push와 PR | Python 3.12에서 Board 해시·캡처 undo 회귀만 실행합니다. 엔진 빌드나 GPU 검증이 아닙니다. |
@@ -90,6 +90,22 @@ python3 -B -m unittest discover -s scripts -p test_windows_cuda_bundle.py -v
 네트워크를 사용하지 않는 cache hit에서도 무결성 검사가 유지되는지 확인합니다.
 구조 검사는 키 격리·기존 테스트 단계·수동 ONNX opt-in이 의도대로 연결됐는지 확인하지만,
 실제 플랫폼 CI 실행을 대신하지 않습니다.
+
+분석 출력 필터 회귀는 실제 엔진으로 흑·백, `lz-analyze`·`kata-analyze`,
+대칭 가지치기 켜짐·꺼짐에서 `minmoves`·`maxmoves`를 검사합니다. 최소 개수를 채우는
+0방문 후보는 유지하고, 초과한 0방문 후보만 제거하며, 방문한 대칭 후보는 최소 개수를
+넘더라도 유지하는지 확인합니다. 기존 `visitCapContempt = 2`로 루트의 선택 분포를 고정해
+보고 시점에 따라 후보 수가 달라지는 것을 막고, 중단 응답 전까지 받은 보고서를 모두 검사합니다.
+
+```sh
+python3 python/test_gtp_analysis_filter.py --engine build-eigen/katago \
+  --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz \
+  --output analysis-filter-proof
+```
+
+출력 디렉터리는 새 경로여야 하며, 실패해도 설정과 GTP·stderr 로그는 남습니다.
+전체 검증과 정상 종료를 확인한 경우에만 엔진·모델 해시와 72개 사례를 담은
+`result.json`을 기록합니다. 이 CPU 검증은 CUDA 빌드나 GPU 추론 검증을 대신하지 않습니다.
 
 속도 평가는 같은 소스와 같은 도구체인의 cold/warm 실행을 비교합니다. ccache 통계,
 configure/build/test 시간, cache restore/save 시간과 크기를 분리해 읽어야 합니다.

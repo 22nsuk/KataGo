@@ -220,7 +220,7 @@ class Probe:
             if line.startswith(f'={serial}'):
                 started = True
                 response.append(line[len(str(serial)) + 1:].strip())
-                if text.startswith('kata-analyze'):
+                if text.split()[0] in ('kata-analyze', 'lz-analyze'):
                     return '\n'.join(response)
             elif started:
                 if not line:

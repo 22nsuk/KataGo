@@ -284,6 +284,26 @@ for request in sys.stdin:
             with (root / 'gtp.log').open() as stream:
                 self.assertEqual(sum(line.startswith('< info ') for line in stream), 200)
 
+    def test_continuous_analysis_ack_does_not_wait_for_stream_end(self):
+        body = '''
+import sys
+for request in sys.stdin:
+    serial, command = request.strip().split(' ', 1)
+    if command.split()[0] in ('lz-analyze', 'kata-analyze'):
+        print('=' + serial, flush=True)
+        print('info move D4 visits 1', flush=True)
+    else:
+        print('=' + serial + '\\n', flush=True)
+        if command == 'quit':
+            break
+'''
+        for command in ('lz-analyze', 'kata-analyze'):
+            with self.subTest(command=command), self.producer(body) as (probe, _):
+                self.assertEqual(probe.command(command + ' B', timeout=5), '')
+                self.assertEqual(probe.line(time.monotonic() + 5), 'info move D4 visits 1')
+                self.assertEqual(probe.command('name', timeout=5), '')
+                self.assertTrue(probe.close())
+
     def test_unterminated_multiline_response_has_a_memory_limit(self):
         body = '''
 import sys
