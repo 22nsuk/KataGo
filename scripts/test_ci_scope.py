@@ -40,7 +40,52 @@ class ScopeTests(unittest.TestCase):
         base = base or self.base
         event = {'pull_request': {'base': {'sha': base}, 'head': {'sha': head}},
                  'before': base, 'after': head}
-        return ci_scope.needs_native(event_name, event, self.root)[0]
+        return ci_scope.select_checks(event_name, event, self.root)[0]['native']
+
+    def selected_checks(self, head, event_name='pull_request'):
+        event = {'pull_request': {'base': {'sha': self.base}, 'head': {'sha': head}},
+                 'before': self.base, 'after': head}
+        return ci_scope.select_checks(event_name, event, self.root)[0]
+
+    def test_engine_changes_run_cpu_on_pr_and_master_push(self):
+        self.write('cpp/main.cpp', 'changed engine\n')
+        head = self.commit()
+        self.assertEqual(self.selected_checks(head),
+                         {'native': True, 'onnx': True, 'cuda': True, 'board': False})
+        self.assertEqual(self.selected_checks(head, 'push'),
+                         {'native': True, 'onnx': True, 'cuda': False, 'board': False})
+
+    def test_probe_changes_require_cpu_without_backend_rebuilds(self):
+        self.write('python/test_gtp_analysis_filter.py', '# test\n')
+        self.assertEqual(self.selected_checks(self.commit()),
+                         {'native': True, 'onnx': False, 'cuda': False, 'board': False})
+
+    def test_board_and_ancestor_hooks_select_board_regression(self):
+        for name in ('python/katago/game/board.py', 'python/tests/test_board_zobrist.py',
+                     'conftest.py', 'python/conftest.py', 'python/tests/conftest.py',
+                     'pytest.ini', 'python/pytest.ini'):
+            with self.subTest(path=name):
+                self.write(name, '# changed\n')
+                head = self.commit()
+                for event in ('pull_request', 'push'):
+                    self.assertTrue(self.selected_checks(head, event)['board'])
+
+    def test_unrelated_test_hook_does_not_select_board(self):
+        self.write('python/unrelated/conftest.py', '# unrelated\n')
+        self.assertFalse(self.selected_checks(self.commit())['board'])
+
+    def test_ci_changes_and_missing_history_keep_all_pr_checks(self):
+        for name in ('.github/workflows/ci.yml', '.github/actions/ccache/action.yml',
+                     'scripts/ci_gate.py', 'scripts/test_ci_gate.py'):
+            self.write(name, '# changed\n')
+            self.assertTrue(all(self.selected_checks(self.commit()).values()))
+        self.assertTrue(all(ci_scope.select_checks('pull_request', {}, self.root)[0].values()))
+        self.assertTrue(all(ci_scope.select_checks('workflow_dispatch', {}, self.root)[0].values()))
+
+    def test_cuda_packaging_changes_select_bundles(self):
+        self.write('scripts/windows_cuda13.lock.json', '{}\n')
+        self.assertEqual(self.selected_checks(self.commit()),
+                         {'native': True, 'onnx': False, 'cuda': True, 'board': False})
 
     def test_docs_only_pr_and_push_skip_native(self):
         self.write('README.md', 'new entry\n')
@@ -70,9 +115,9 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(self.selected(self.base, base='0' * 40))
         self.assertTrue(self.selected(self.base, base='f' * 40))
         self.assertTrue(self.selected(self.base, base='--help'))
-        self.assertTrue(ci_scope.needs_native('push', {}, self.root)[0])
-        self.assertTrue(ci_scope.needs_native('push', [], self.root)[0])
-        self.assertTrue(ci_scope.needs_native('workflow_dispatch', {}, self.root)[0])
+        self.assertTrue(ci_scope.select_checks('push', {}, self.root)[0]['native'])
+        self.assertTrue(ci_scope.select_checks('push', [], self.root)[0]['native'])
+        self.assertTrue(ci_scope.select_checks('workflow_dispatch', {}, self.root)[0]['native'])
 
     def test_large_diff_does_not_truncate_after_300_paths(self):
         for i in range(310):
@@ -99,7 +144,7 @@ class ScopeTests(unittest.TestCase):
                'GITHUB_OUTPUT': str(output)}
         subprocess.run([os.sys.executable, str(Path(ci_scope.__file__).resolve())],
                        cwd=self.root, env=env, check=True, stdout=subprocess.PIPE)
-        self.assertEqual(output.read_text(), 'native=false\n')
+        self.assertEqual(output.read_text(), 'native=false\nonnx=false\ncuda=false\nboard=false\n')
 
     def test_pr_merge_base_avoids_unrelated_base_branch_changes(self):
         self.git('checkout', '-qb', 'feature')
