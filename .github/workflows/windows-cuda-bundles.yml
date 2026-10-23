@@ -1,18 +1,11 @@
 name: Windows CUDA source bundles
 
 on:
-  pull_request:
-    paths:
-      - cpp/**
-      - scripts/windows_cuda_sdk.py
-      - scripts/build_windows_cuda_bundle.py
-      - scripts/windows_cuda*.lock.json
-      - scripts/test_windows_cuda_bundle.py
-      - .github/workflows/windows-cuda-bundles.yml
+  workflow_call:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-cuda-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

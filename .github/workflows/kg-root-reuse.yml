@@ -1,17 +1,9 @@
 name: Root tree reuse
 on:
-  pull_request:
-    paths:
-      - cpp/**
-      - .github/actions/ccache/**
-      - python/probe_kg_root_reuse.py
-      - python/test_probe_kg_root_reuse.py
-      - python/test_fox_sgf_filter.py
-      - python/test_fox_sgf_filter_validation.py
-      - .github/workflows/kg-root-reuse.yml
+  workflow_call:
   workflow_dispatch:
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-engine-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read

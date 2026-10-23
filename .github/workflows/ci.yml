@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      engine: ${{ steps.scope.outputs.native }}
+      onnx: ${{ steps.scope.outputs.onnx }}
+      cuda: ${{ steps.scope.outputs.cuda }}
+      board: ${{ steps.scope.outputs.board }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select checks from complete Git history
+        id: scope
+        run: python3 -B scripts/ci_scope.py
+
+  general:
+    needs: plan
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/build.yml
+
+  engine:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.engine != 'false') }}
+    uses: ./.github/workflows/kg-root-reuse.yml
+
+  onnx:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.onnx != 'false') }}
+    uses: ./.github/workflows/onnx-backend.yml
+
+  cuda:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.cuda != 'false') }}
+    uses: ./.github/workflows/windows-cuda-bundles.yml
+
+  board:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.board != 'false') }}
+    uses: ./.github/workflows/python-board.yml
+
+  ci-required:
+    name: ci-required
+    if: ${{ always() }}
+    needs: [plan, general, engine, onnx, cuda, board]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Require every selected check to succeed
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 -B scripts/ci_gate.py
