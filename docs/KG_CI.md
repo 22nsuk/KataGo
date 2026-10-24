@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | CI | 모든 `master` 대상 PR와 `master` push | 변경 범위를 계산하고 아래 재사용 워크플로를 호출한 뒤, 항상 `ci-required`로 결과를 집계합니다. 수동 실행은 모든 기본 검사를 선택합니다. |
 | Build and Test | CI가 항상 호출합니다. 문서만 바뀐 것이 확인될 때에만 6개 플랫폼 빌드를 건너뜁니다. | 가벼운 정책 검사와 OpenCL·Metal·ROCm 빌드 및 `runtests`를 유지합니다. GPU 실기 승인이 아닙니다. |
-| Root tree reuse | 문서 전용을 제외한 PR와 `master` push에서 CI가 호출합니다. | Eigen 빌드, 네이티브 테스트, 실제 GTP 6조합, Fox 변환 검증을 모두 실행합니다. |
+| Root tree reuse | 문서 전용을 제외한 PR와 `master` push에서 CI가 호출합니다. | Eigen 빌드, 네이티브 테스트, 루트 재사용 GTP 6조합, 분석 출력 필터 72조합, Fox 변환 검증을 모두 실행합니다. |
 | ONNX backend build & test | C++·CI 설정 변경의 PR와 `master` push에서 CI가 호출합니다. | 기본은 CPU·DirectML 3조합입니다. 개별 수동 실행의 `include_slow=true`에서만 OpenVINO·TensorRT 소스 빌드를 추가합니다. |
 | Windows CUDA source bundles | C++·번들 스크립트·잠금 파일·CI 설정 변경 PR에서 CI가 호출합니다. | CUDA 12·13 프로필을 모두 빌드·검사합니다. `master` push는 중복 번들을 만들지 않으며, 릴리스 소스 검증은 별도로 수동 실행합니다. |
 | Python board regressions | 바둑판 코드·테스트·상위 conftest·pytest 설정 또는 CI 설정 변경의 PR와 `master` push에서 CI가 호출합니다. | Python 3.12에서 Board 해시·캡처 undo 회귀를 실행합니다. |
@@ -115,6 +115,22 @@ python3 -B -m unittest discover -s scripts -p test_windows_cuda_bundle.py -v
 네트워크를 사용하지 않는 cache hit에서도 무결성 검사가 유지되는지 확인합니다.
 구조 검사는 키 격리·기존 테스트 단계·수동 ONNX opt-in이 의도대로 연결됐는지 확인하지만,
 실제 플랫폼 CI 실행을 대신하지 않습니다.
+
+분석 출력 필터 회귀는 실제 엔진으로 흑·백, `lz-analyze`·`kata-analyze`,
+대칭 가지치기 켜짐·꺼짐에서 `minmoves`·`maxmoves`를 검사합니다. 최소 개수를 채우는
+0방문 후보는 유지하고, 초과한 0방문 후보만 제거하며, 방문한 대칭 후보는 최소 개수를
+넘더라도 유지하는지 확인합니다. 기존 `visitCapContempt = 2`로 루트의 선택 분포를 고정해
+보고 시점에 따라 후보 수가 달라지는 것을 막고, 중단 응답 전까지 받은 보고서를 모두 검사합니다.
+
+```sh
+python3 python/test_gtp_analysis_filter.py --engine build-eigen/katago \
+  --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz \
+  --output analysis-filter-proof
+```
+
+출력 디렉터리는 새 경로여야 하며, 실패해도 설정과 GTP·stderr 로그는 남습니다.
+전체 검증과 정상 종료를 확인한 경우에만 엔진·모델 해시와 72개 사례를 담은
+`result.json`을 기록합니다. 이 CPU 검증은 CUDA 빌드나 GPU 추론 검증을 대신하지 않습니다.
 
 속도 평가는 같은 소스와 같은 도구체인의 cold/warm 실행을 비교합니다. ccache 통계,
 configure/build/test 시간, cache restore/save 시간과 크기를 분리해 읽어야 합니다.

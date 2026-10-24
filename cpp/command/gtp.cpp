@@ -767,7 +767,7 @@ struct GTPEngine {
     double focusProb = 0.0;
   };
 
-  void filterZeroVisitMoves(const AnalyzeArgs& args, vector<AnalysisData> buf) {
+  void filterZeroVisitMoves(const AnalyzeArgs& args, vector<AnalysisData>& buf) {
     //Avoid printing moves that have 0 visits, unless we need them
     //These should already be sorted so that 0-visit moves only appear at the end.
     int keptMoves = 0;
