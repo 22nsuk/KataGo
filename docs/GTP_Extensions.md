@@ -227,6 +227,7 @@ In addition to a basic set of [GTP commands](https://www.lysator.liu.se/~gunnar/
 
   * `kata-get-param PARAM`, `kata-set-param PARAM VALUE`
      * Get a parameter or set a parameter to a given value.
+     * If a setting is rejected, the command returns a GTP error and leaves the current parameter settings unchanged.
      * Almost any search-related parameter in the GTP config can be retrieved or set. Some of the notable ones are:
         * `playoutDoublingAdvantage (float)`. See documentation for this parameter in [the example config](../cpp/configs/gtp_example.cfg). Setting this via this command affects the value used for analysis, and affects play only if the config is not already set to use `dynamicPlayoutDoublingAdvantageCapPerOppLead`.
         * `visitCapContempt (int)`. Model the opponent as searching with only this many visits per position (at least 2, or set to 0 to disable), see documentation for this parameter in [the example config](../cpp/configs/gtp_example.cfg). Affects both play and analysis.
@@ -249,6 +250,7 @@ In addition to a basic set of [GTP commands](https://www.lysator.liu.se/~gunnar/
 
   * `kata-set-params PARAMS`
      * Set multiple parameters at once. `PARAMS` should be a JSON dictionary of parameter names and values.
+     * All settings are validated before any are applied. Invalid JSON or a rejected setting returns a GTP error and leaves all current parameter settings unchanged, including those used by subsequent commands.
 
   * `kata-get-models`
      * Returns a JSON array with information about the loaded models (main model and human SL model if available).

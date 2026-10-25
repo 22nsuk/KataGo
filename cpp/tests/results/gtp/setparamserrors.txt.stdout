@@ -1,0 +1,111 @@
+=1 
+
+?2 Could not set params: Could not parse 'invalid' as bool for key 'allowResignation' in config file configs/gtp_example.cfg and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides
+
+=3 true
+
+=4 
+
+=5 41
+
+?6 Could not set params: Could not parse 'invalid' as bool for key 'ponderingEnabled' in config file configs/gtp_example.cfg and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides
+
+=7 false
+
+=8 
+
+=9 43
+
+?10 Could not set params: Key 'delayMoveScale' must be in the range 0 to 10000 in config file configs/gtp_example.cfg and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides
+
+=11 1.25
+
+=12 
+
+=13 47
+
+?14 Could not set params: Key 'delayMoveMax' must be in the range 0 to 1e+06 in config file configs/gtp_example.cfg and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides
+
+=15 12.5
+
+=16 
+
+=17 53
+
+?18 Could not set params: Cannot change useEvalCache after initialization
+
+=19 
+
+=20 59
+
+?21 Could not set params: Could not find key 'numSearchThreads' in config file configs/gtp_example.cfg and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides
+
+=22 1
+
+=23 
+
+=24 61
+
+?25 Could not set params: Could not parse 'invalid' as bool for key 'allowResignation' in config file configs/gtp_example.cfg and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides and/or command-line and query overrides
+
+=26 61
+
+=27 true
+
+=28 
+
+=29 61
+
+=30 false
+
+?31 Could not set params: WARNING: humanSLProfile is specified as config param but model(s) don't use it: tests/models/g170-b6c96-s175395328-d26788732.bin.gz
+
+
+=32 61
+
+=33 
+
+=34 
+
+?35 Could not set params: Unrecognized or non-overridable parameter in kata-set-params: unknownParam
+
+=36 61
+
+=37 
+
+=38 67
+
+=39 true
+
+=40 2
+
+=41 8
+
+=42 2
+
+=43 
+
+=44 0.5
+
+=45 
+
+=46 1e+20
+
+?47 Could not set params: [json.exception.parse_error.101] parse error at line 1, column 14: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal
+
+=48 KataGo
+
+?49 Could not set params: [json.exception.out_of_range.406] number overflow parsing '1e1000'
+
+=50 KataGo
+
+?51 Could not set params: Argument to kata-set-params must be a json object
+
+=52 67
+
+=53 
+
+=54 71
+
+=55 
+

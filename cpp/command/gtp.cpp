@@ -2765,6 +2765,10 @@ int MainCmds::gtp(const vector<string>& args) {
               overrideSettings[it.key()] = it.value().is_string() ? it.value().get<string>(): it.value().dump(); // always convert to string
             }
           }
+          catch(const nlohmann::json::exception& exception) {
+            responseIsError = true;
+            response = string("Could not set params: ") + exception.what();
+          }
           catch(const StringError& exception) {
             responseIsError = true;
             response = string("Could not set params: ") + exception.what();
@@ -2804,21 +2808,26 @@ int MainCmds::gtp(const vector<string>& args) {
             }
           }
 
-          //Ignore any unused keys in the original config so far
-          cfg.markAllKeysUsedWithPrefix("");
-          // Now enshrine the new settings into the real config permanently, and parse.
-          cfg.overrideKeys(overrideSettings);
+          // Validate the complete resulting config before changing either the stored config or the engine.
+          // Failed overrides must not remain in the config and affect later commands.
+          ConfigParser nextCfg(cfg);
+          nextCfg.overrideKeys(overrideSettings);
           SearchParams genmoveParams;
           SearchParams analysisParams;
-          loadParams(cfg,genmoveParams,analysisParams);
+          loadParams(nextCfg,genmoveParams,analysisParams);
 
-          bool desiredAllowResignation = cfg.contains("allowResignation") ? cfg.getBool("allowResignation") : allowResignation;
-          bool desiredPonderingEnabled = cfg.contains("ponderingEnabled") ? cfg.getBool("ponderingEnabled") : ponderingEnabled;
-          double desiredDelayMoveScale = cfg.contains("delayMoveScale") ? cfg.getDouble("delayMoveScale",0.0,10000.0) : engine->delayMoveScale;
-          double desiredDelayMoveMax = cfg.contains("delayMoveMax") ? cfg.getDouble("delayMoveMax",0.0,1000000.0) : engine->delayMoveMax;
+          bool desiredAllowResignation = nextCfg.contains("allowResignation") ? nextCfg.getBool("allowResignation") : allowResignation;
+          bool desiredPonderingEnabled = nextCfg.contains("ponderingEnabled") ? nextCfg.getBool("ponderingEnabled") : ponderingEnabled;
+          double desiredDelayMoveScale = nextCfg.contains("delayMoveScale") ? nextCfg.getDouble("delayMoveScale",0.0,10000.0) : engine->delayMoveScale;
+          double desiredDelayMoveMax = nextCfg.contains("delayMoveMax") ? nextCfg.getDouble("delayMoveMax",0.0,1000000.0) : engine->delayMoveMax;
+          bool desiredStaticPDATakesPrecedence = nextCfg.contains("playoutDoublingAdvantage") && !nextCfg.contains("dynamicPlayoutDoublingAdvantageCapPerOppLead");
 
           SearchParams::failIfParamsDifferOnUnchangeableParameter(initialGenmoveParams,genmoveParams);
           SearchParams::failIfParamsDifferOnUnchangeableParameter(initialAnalysisParams,analysisParams);
+
+          // All input validation succeeded. Commit the config and the prepared runtime settings together.
+          cfg.overrideKeys(overrideSettings);
+          cfg.markAllKeysUsedWithPrefix("");
           BoardHistoryModes oldHistoryModes = Search::resolveHistoryModes(engine->getGenmoveParams(),engine->nnEval);
           engine->setGenmoveParamsIfChanged(genmoveParams);
           engine->setAnalysisParamsIfChanged(analysisParams);
@@ -2828,7 +2837,7 @@ int MainCmds::gtp(const vector<string>& args) {
           BoardHistoryModes newHistoryModes = Search::resolveHistoryModes(engine->getGenmoveParams(),engine->nnEval);
           if(newHistoryModes != oldHistoryModes)
             engine->rereplayGameForHistoryModesChange();
-          staticPDATakesPrecedence = cfg.contains("playoutDoublingAdvantage") && !cfg.contains("dynamicPlayoutDoublingAdvantageCapPerOppLead");
+          staticPDATakesPrecedence = desiredStaticPDATakesPrecedence;
           engine->staticPDATakesPrecedence = staticPDATakesPrecedence;
           allowResignation = desiredAllowResignation;
           ponderingEnabled = desiredPonderingEnabled;
