@@ -1,0 +1,64 @@
+# Rejected requests must not poison the config read by the next valid update.
+1 kata-set-params {"maxVisits":37,"allowResignation":true,"ponderingEnabled":false,"delayMoveScale":1.25,"delayMoveMax":12.5,"numSearchThreads":1}
+2 kata-set-param allowResignation invalid
+3 kata-get-param allowResignation
+4 kata-set-param maxVisits 41
+5 kata-get-param maxVisits
+6 kata-set-param ponderingEnabled invalid
+7 kata-get-param ponderingEnabled
+8 kata-set-param maxVisits 43
+9 kata-get-param maxVisits
+10 kata-set-param delayMoveScale -1
+11 kata-get-param delayMoveScale
+12 kata-set-param maxVisits 47
+13 kata-get-param maxVisits
+14 kata-set-param delayMoveMax 1000001
+15 kata-get-param delayMoveMax
+16 kata-set-param maxVisits 53
+17 kata-get-param maxVisits
+18 kata-set-param useEvalCache true
+19 kata-set-param maxVisits 59
+20 kata-get-param maxVisits
+21 kata-set-param numSearchThreads
+22 kata-get-param numSearchThreads
+23 kata-set-param maxVisits 61
+24 kata-get-param maxVisits
+
+# A rejected batch must not apply its valid field after the invalid field is repaired.
+25 kata-set-params {"maxVisits":5,"allowResignation":"invalid"}
+26 kata-get-param maxVisits
+27 kata-get-param allowResignation
+28 kata-set-param allowResignation false
+29 kata-get-param maxVisits
+30 kata-get-param allowResignation
+
+# Preserve validation for unknown keys and models that do not support HumanSL profiles.
+31 kata-set-params {"maxVisits":7,"humanSLProfile":"rank_10k"}
+32 kata-get-param maxVisits
+33 kata-get-param humanSLProfile
+34 kata-set-param humanSLProfile
+35 kata-set-params {"maxVisits":9,"unknownParam":3}
+36 kata-get-param maxVisits
+
+# Valid single and batch updates, including empty-string removal, still work.
+37 kata-set-params {"maxVisits":67,"allowResignation":true,"delayMoveScale":2,"delayMoveMax":8,"numSearchThreads":2}
+38 kata-get-param maxVisits
+39 kata-get-param allowResignation
+40 kata-get-param delayMoveScale
+41 kata-get-param delayMoveMax
+42 kata-get-param numSearchThreads
+43 kata-set-param maxTime 0.5
+44 kata-get-param maxTime
+45 kata-set-params {"maxTime":""}
+46 kata-get-param maxTime
+
+# JSON syntax, numeric overflow and non-object errors must leave the process usable.
+47 kata-set-params {"maxVisits":
+48 name
+49 kata-set-params {"maxTime":1e1000}
+50 name
+51 kata-set-params []
+52 kata-get-param maxVisits
+53 kata-set-param maxVisits 71
+54 kata-get-param maxVisits
+55 quit
