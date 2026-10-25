@@ -9,6 +9,7 @@ numWorkerThreads = 4
 
 기존 명령의 `-override-config "numWorkerThreads=4"`로도 지정할 수 있습니다.
 허용 범위는 1–1024이며, 생략하면 기존 대량 변환의 상한인 64를 유지합니다.
+범위 밖 값이나 정수가 아닌 값은 NN 초기화 전에 오류 코드 1로 종료합니다.
 유효 worker 수는 다음 세 값의 최솟값입니다.
 
 - 설정한 `numWorkerThreads`(기본 64)

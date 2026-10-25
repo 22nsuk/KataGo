@@ -718,7 +718,16 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
   }
   logger.addFile(outputDir + "/" + "log.log");
 
-  const int configuredWorkerThreads = cfg.contains("numWorkerThreads") ? cfg.getInt("numWorkerThreads",1,1024) : 64;
+  int configuredWorkerThreads = 64;
+  try {
+    if(cfg.contains("numWorkerThreads"))
+      configuredWorkerThreads = cfg.getInt("numWorkerThreads",1,1024);
+  }
+  catch(const IOError& e) {
+    cerr << e.what() << endl;
+    ScoreValue::freeTables();
+    return 1;
+  }
   const int numSearchThreads = 1;
 
   const int dataBoardLen = cfg.getInt("dataBoardLen",3,Board::MAX_LEN);

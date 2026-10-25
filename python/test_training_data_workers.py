@@ -59,7 +59,8 @@ def run(engine: Path, model: Path, root: Path):
         name = f'invalid-{invalid}'
         try:
             run_case(engine, model, root, name, 'fox', [], {}, 0, workers=invalid)
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as error:
+            assert error.returncode == 1, (name, error.returncode)
             log = (root / name / 'process.log').read_text(encoding='utf-8')
             assert 'numWorkerThreads' in log, log
             assert 'Loaded neural net' not in log, log
