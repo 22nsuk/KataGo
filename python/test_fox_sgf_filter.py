@@ -87,7 +87,8 @@ def done_counts(log: str) -> dict[str, int]:
 
 
 def run_case(engine: Path, model: Path, root: Path, name: str, source: str,
-             records: list[str], expected: dict[str, int], expected_rows: int) -> dict:
+             records: list[str], expected: dict[str, int], expected_rows: int, *,
+             workers: int | str | None = None, max_files: int | None = None) -> dict:
     directory = root / name
     inputs = directory / "sgfs"
     inputs.mkdir(parents=True)
@@ -100,7 +101,8 @@ def run_case(engine: Path, model: Path, root: Path, name: str, source: str,
         "dataBoardLen = 9\nallowedBoardSizes = 9-9\n"
         "maxApproxRowsPerTrainFile = 32\n"
         "nnMaxBatchSize = 8\n"
-        "nnCacheSizePowerOfTwo = 10\n",
+        "nnCacheSizePowerOfTwo = 10\n"
+        + (f"numWorkerThreads = {workers}\n" if workers is not None else ""),
         encoding="utf-8",
     )
     output = directory / "data"
@@ -110,6 +112,8 @@ def run_case(engine: Path, model: Path, root: Path, name: str, source: str,
         "-no-train-users-file", str(empty), "-no-game-users-file", str(empty),
         "-is-bot-users-file", str(empty), "-keep-prob", "1", "-max-visits", "2",
     ]
+    if max_files is not None:
+        command += ["-max-files-to-load", str(max_files)]
     (directory / "command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
     with (directory / "process.log").open("w", encoding="utf-8") as stream:
         subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=120)
@@ -123,7 +127,8 @@ def run_case(engine: Path, model: Path, root: Path, name: str, source: str,
                 "logged_rows": int(totals[0]), "npz_rows": rows, "npz_files": len(archives)}
     (directory / "observed.json").write_text(json.dumps(observed, indent=2), encoding="utf-8")
     assert counts == expected, f"{name}: completion counts {counts} != {expected}"
-    assert sum(counts.values()) == len(records), (name, counts)
+    expected_processed = len(records) if max_files is None else min(len(records), max_files)
+    assert sum(counts.values()) == expected_processed, (name, counts)
     assert int(totals[0]) == rows == expected_rows, (name, observed, expected_rows)
     assert not list(output.glob("*.tmp")), f"{name}: incomplete output archive"
     if expected_rows == 0:
