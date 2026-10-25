@@ -48,6 +48,8 @@ jobs:
           diff -u tests/results/gtp/setparamserrors.txt.stdout "$RUNNER_TEMP/gtp-setparamserrors.stdout"
       - name: Check Fox SGF exclusion, output, and accounting
         run: python3 python/test_fox_sgf_filter.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/fox-filter-proof"
+      - name: Check training-data worker limits and empty input
+        run: python3 python/test_training_data_workers.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/training-workers-proof"
       - name: Check GTP move filtering for both colors and analysis formats
         run: python3 python/test_gtp_analysis_filter.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/analysis-filter-proof"
       - name: Check GTP parameter command discovery and JSON updates
@@ -67,6 +69,7 @@ jobs:
           path: |
             ${{ runner.temp }}/kg-proof/
             ${{ runner.temp }}/fox-filter-proof/
+            ${{ runner.temp }}/training-workers-proof/
             ${{ runner.temp }}/analysis-filter-proof/
             ${{ runner.temp }}/parameter-commands-proof/
             ${{ runner.temp }}/kg-runtests.log

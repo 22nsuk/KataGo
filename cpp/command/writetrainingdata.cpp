@@ -718,9 +718,17 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
   }
   logger.addFile(outputDir + "/" + "log.log");
 
-  const int numWorkerThreads = 64;
+  int configuredWorkerThreads = 64;
+  try {
+    if(cfg.contains("numWorkerThreads"))
+      configuredWorkerThreads = cfg.getInt("numWorkerThreads",1,1024);
+  }
+  catch(const IOError& e) {
+    cerr << e.what() << endl;
+    ScoreValue::freeTables();
+    return 1;
+  }
   const int numSearchThreads = 1;
-  const int numTotalThreads = numWorkerThreads * numSearchThreads;
 
   const int dataBoardLen = cfg.getInt("dataBoardLen",3,Board::MAX_LEN);
   const int maxApproxRowsPerTrainFile = cfg.getInt("maxApproxRowsPerTrainFile",1,100000000);
@@ -743,6 +751,36 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
   const std::set<string> isBotUsers = loadStrippedTxtFileLines(isBotUsersFile);
   const std::set<string> excludeFiles =
     (excludeGamesFile != "") ? loadStrippedTxtFileLinesWithComments(excludeGamesFile) : std::set<string>();
+
+  std::map<string,KGSCsvLine> kgsCsvMap;
+  if(kgsCsv != "") {
+    if(whatDataSource != "kgs")
+      throw StringError("Provided kgs csv but data source is not kgs");
+    readKgsCsv(kgsCsv, kgsCsvMinDate, kgsCsvMaxDate, logger, kgsCsvMap);
+  }
+
+  vector<string> sgfFiles;
+  FileHelpers::collectSgfsFromDirsOrFiles(sgfDirs,sgfFiles);
+  logger.write("Collected " + Global::int64ToString(sgfFiles.size()) + " files");
+  const size_t numFilesToProcess = std::min(maxFilesToLoad,sgfFiles.size());
+  // Use one count for NN concurrency, per-worker resources, and execution.
+  const int numWorkerThreads = (int)std::min((size_t)configuredWorkerThreads,numFilesToProcess);
+  const int numTotalThreads = numWorkerThreads * numSearchThreads;
+  logger.write(
+    "Processing " + Global::int64ToString(numFilesToProcess) + " files with " +
+    Global::intToString(numWorkerThreads) + " worker threads (configured limit " +
+    Global::intToString(configuredWorkerThreads) + ")"
+  );
+  if(numFilesToProcess == 0) {
+    logger.write("No input files to process; skipping neural net and worker initialization");
+    logger.write("===================================================");
+    logger.write("Counts by done");
+    logger.write("===================================================");
+    logger.write("Total rows: 0");
+    logger.write("All done");
+    ScoreValue::freeTables();
+    return 0;
+  }
 
   NNEvaluator* nnEval;
   {
@@ -776,17 +814,6 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
   params.rootEndingBonusPoints = 0.8; // More aggressive game ending
   params.conservativePass = false; // false since we want game completions to be consistent with strict rules
   params.enablePassingHacks = true;
-
-  std::map<string,KGSCsvLine> kgsCsvMap;
-  if(kgsCsv != "") {
-    if(whatDataSource != "kgs")
-      throw StringError("Provided kgs csv but data source is not kgs");
-    readKgsCsv(kgsCsv, kgsCsvMinDate, kgsCsvMaxDate, logger, kgsCsvMap);
-  }
-
-  vector<string> sgfFiles;
-  FileHelpers::collectSgfsFromDirsOrFiles(sgfDirs,sgfFiles);
-  logger.write("Collected " + Global::int64ToString(sgfFiles.size()) + " files");
 
   if(shuffleFiles) {
     seedRand.shuffle(sgfFiles);
@@ -842,9 +869,9 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       doneGameCountByReason[reasonLabel] += 1;
     }
 
-    if(numDone == sgfFiles.size() || numDone % 100 == 0) {
+    if(numDone == numFilesToProcess || numDone % 100 == 0) {
       logger.write(
-        "Done " + Global::int64ToString(numDone) + " / " + Global::int64ToString(sgfFiles.size()) + " sgfs, " +
+        "Done " + Global::int64ToString(numDone) + " / " + Global::int64ToString(numFilesToProcess) + " sgfs, " +
         string("errors ") + Global::int64ToString(numErrors)
       );
     }
@@ -871,6 +898,7 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
     search->setAlwaysIncludeOwnerMap(true);
     threadSearchers.push_back(search);
   }
+  logger.write("Initialized " + Global::int64ToString(threadDataBuffers.size()) + " training workers");
 
   auto saveDataBuffer = [&](TrainingWriteBuffers* dataBuffer, Rand& rand) {
     int64_t numRows = dataBuffer->curRows;
@@ -2463,7 +2491,7 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
 
   Parallel::iterRange(
     numWorkerThreads,
-    std::min(maxFilesToLoad,sgfFiles.size()),
+    numFilesToProcess,
     logger,
     std::function<void(int,size_t)>(processSgf)
   );
