@@ -245,6 +245,13 @@ In addition to a basic set of [GTP commands](https://www.lysator.liu.se/~gunnar/
   * `kata-list-params`
      * Report all PARAMs supported by `kata-get-param`, separated by whitespace.
 
+  * `kata-get-param-state PARAM`
+     * Get a restorable snapshot of `analysisWideRootNoise` or `playoutDoublingAdvantage`. Other names and argument counts return a GTP error. The command does not modify settings.
+     * Returns a JSON object with `value`, the effective numeric parameter serialized with double round-trip precision, and `configuredValue`, the ordinary config key's string value or JSON `null` if that key is absent. For example, `{"value":0.0,"configuredValue":null}` differs from `{"value":0.0,"configuredValue":"0"}`.
+     * `value` reports analysis WRN or the configured search PDA, not the dynamically adjusted PDA of an individual generated move. The snapshot covers only the named ordinary key. Indexed names such as `playoutDoublingAdvantage0` are not supported by this command or used by GTP's single-configuration parameter loader.
+     * To restore the captured key, pass its `configuredValue` to `kata-set-params`, substituting an empty string for JSON `null`: for example, `kata-set-params {"playoutDoublingAdvantage":""}` removes the ordinary PDA key. Do not pass JSON `null` to the setter. Read the snapshot again to verify both fields. Preserving key absence matters because an explicit PDA key can switch play from dynamic to static PDA; restoring only its numeric value does not preserve that mode.
+     * This command leaves the existing parameter getters and setters unchanged. Controllers can discover it through `known_command` or `list_commands`.
+
   * `kata-get-params`
      * Get the current values of all parameters as a JSON dictionary.
 

@@ -134,7 +134,10 @@ python3 python/test_gtp_analysis_filter.py --engine build-eigen/katago \
 
 파라미터 명령 회귀는 `known_command`와 `list_commands`에서 단일·복수 파라미터
 명령이 노출되는지, 미지원 명령은 `false`로 조회되는지, JSON으로 설정한 값을 복수·단일 조회로
-다시 읽을 수 있는지 검사합니다. 기존 probe의 프로세스 종료·로그 검증을 재사용하며,
+다시 읽을 수 있는지 검사합니다. `kata-get-param-state`의 정확한 WRN/PDA 값과 설정 키
+유무·문자열도 검증하며, PDA와 dynamic cap의 네 가지 설정 조합에서 복원 전후 실제
+착수 검색의 PDA가 유지되는지 확인합니다. 명시적 0, GTP에서 무시되는 indexed 키,
+잘못된 명령과 거부된 setter의 상태 보존도 검사합니다. 기존 probe의 프로세스 종료·로그 검증을 재사용하며,
 CI의 `root-reuse-proof` 아티팩트에 `parameter-commands-proof` 결과를 함께 보관합니다.
 
 ```sh
