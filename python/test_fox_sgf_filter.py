@@ -88,7 +88,8 @@ def done_counts(log: str) -> dict[str, int]:
 
 def run_case(engine: Path, model: Path, root: Path, name: str, source: str,
              records: list[str], expected: dict[str, int], expected_rows: int, *,
-             workers: int | str | None = None, max_files: int | None = None) -> dict:
+             workers: int | str | None = None, max_files: int | None = None,
+             ordered_files: bool = False, max_rows: int = 32) -> dict:
     directory = root / name
     inputs = directory / "sgfs"
     inputs.mkdir(parents=True)
@@ -99,7 +100,7 @@ def run_case(engine: Path, model: Path, root: Path, name: str, source: str,
     config = directory / "test.cfg"
     config.write_text(
         "dataBoardLen = 9\nallowedBoardSizes = 9-9\n"
-        "maxApproxRowsPerTrainFile = 32\n"
+        f"maxApproxRowsPerTrainFile = {max_rows}\n"
         "nnMaxBatchSize = 8\n"
         "nnCacheSizePowerOfTwo = 10\n"
         + (f"numWorkerThreads = {workers}\n" if workers is not None else ""),
@@ -108,10 +109,13 @@ def run_case(engine: Path, model: Path, root: Path, name: str, source: str,
     output = directory / "data"
     command = [
         str(engine), "writetrainingdata", "-model", str(model), "-config", str(config),
-        "-sgfdir", str(inputs), "-what-data-source", source, "-output-dir", str(output),
+        "-what-data-source", source, "-output-dir", str(output),
         "-no-train-users-file", str(empty), "-no-game-users-file", str(empty),
         "-is-bot-users-file", str(empty), "-keep-prob", "1", "-max-visits", "2",
     ]
+    # Explicit file arguments preserve order without relying on directory traversal.
+    for path in sorted(inputs.glob('*.sgf')) if ordered_files else [inputs]:
+        command += ["-sgfdir", str(path)]
     if max_files is not None:
         command += ["-max-files-to-load", str(max_files)]
     (directory / "command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")

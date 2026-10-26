@@ -44,6 +44,24 @@ worker 수를 바꾸면 출력 파일명, 파일 분할, 행 순서 및 난수 �
 
 ## 회귀검사
 
+시간 설정의 숫자·형식·범위 파싱 오류는 해당 기보를 `BadTimeControl`로 집계하고
+건너뜁니다. 날짜 파싱 오류는 `GameBadDate`로 집계합니다. GoGoD의 날짜 보정과
+연도를 찾을 수 없을 때의 기존 `GameDateParsing` 분류는 유지합니다. 로그에는 오류가
+발생한 파일과 이유가 기록되고, 나머지 기보는 계속 변환되며 이미 버퍼에 쌓인 정상 행도
+저장됩니다. 이 처리는 시간·날짜 파싱 오류에 한정하며 모델 로딩·검색·출력 저장 오류를
+정상적인 기보 제외로 바꾸지 않습니다.
+
+```sh
+python3 python/test_training_data_metadata.py --engine build-eigen/katago \
+  --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz \
+  --output training-metadata-proof
+```
+
+Fox·OGS·KGS·Go4Go·GoGoD에서 정상 기보 → 오류 기보 → 정상 기보 순서를 고정해
+검사합니다. 오류 전후의 흑승·백승 기보가 실제 NPZ에 각각 한 번씩 보존되는지, 제외
+사유와 처리 건수가 맞는지 검증합니다. 정상 시간 형식과 GoGoD 날짜 보정, 오류 기보만
+있는 입력, 복수 worker의 혼합 입력 및 모델 로딩 실패도 검사합니다.
+
 ```sh
 python3 python/test_training_data_workers.py --engine build-eigen/katago \
   --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz \

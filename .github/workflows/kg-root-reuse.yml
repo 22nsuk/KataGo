@@ -52,6 +52,8 @@ jobs:
         run: python3 python/test_training_data_workers.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/training-workers-proof"
       - name: Check SGF winners in training-data targets
         run: python3 python/test_training_data_results.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/training-results-proof"
+      - name: Check training-data metadata error isolation and buffered output
+        run: python3 python/test_training_data_metadata.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/training-metadata-proof"
       - name: Check GTP move filtering for both colors and analysis formats
         run: python3 python/test_gtp_analysis_filter.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/analysis-filter-proof"
       - name: Check GTP parameter command discovery and JSON updates
@@ -73,6 +75,7 @@ jobs:
             ${{ runner.temp }}/fox-filter-proof/
             ${{ runner.temp }}/training-workers-proof/
             ${{ runner.temp }}/training-results-proof/
+            ${{ runner.temp }}/training-metadata-proof/
             ${{ runner.temp }}/analysis-filter-proof/
             ${{ runner.temp }}/parameter-commands-proof/
             ${{ runner.temp }}/kg-runtests.log

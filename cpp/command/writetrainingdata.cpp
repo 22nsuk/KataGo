@@ -1662,8 +1662,8 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       }
     }
 
-    bool assumeMultipleStartingBlackMovesAreHandicap;
-    int overrideNumHandicapStones = -1;
+    bool assumeMultipleStartingBlackMovesAreHandicap = false;
+    int overrideNumHandicapStones = sgfHandicapParsed >= 0 ? sgfHandicapParsed : -1;
     bool tcIsUnknown = false;
     bool tcIsNone = false;
     bool tcIsAbsolute = false;
@@ -1675,133 +1675,106 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
     double periodTimeSeconds = 0.0;
     int byoYomiPeriods = 0;
     int canadianMoves = 0;
-    SimpleDate gameDate;
-    int sgfSource;
-    if(whatDataSource == "ogs" || whatDataSource == "kgs") {
-      assumeMultipleStartingBlackMovesAreHandicap = false;
-      if(sgfHandicapParsed >= 0)
-        overrideNumHandicapStones = sgfHandicapParsed;
-
-      if(sgfTM != "" && sgfOT != "") {
-        if(sgfOT.find(" byo-yomi") != std::string::npos) {
+    // Only malformed input metadata is recoverable here. Search and output failures remain fatal.
+    try {
+      if(whatDataSource == "ogs" || whatDataSource == "kgs") {
+        if(sgfTM != "" && sgfOT != "") {
+          if(sgfOT.find(" byo-yomi") != std::string::npos) {
+            tcIsByoYomi = true;
+            mainTimeSeconds = Global::stringToDouble(sgfTM);
+            vector<string> pieces = Global::split(Global::split(sgfOT,' ')[0],'x');
+            if(pieces.size() != 2)
+              throw StringError("Could not parse OT: " + sgfOT);
+            byoYomiPeriods = Global::stringToInt(pieces[0]);
+            periodTimeSeconds = Global::stringToDouble(pieces[1]);
+            if(byoYomiPeriods <= 0 || byoYomiPeriods > 1000 || !std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000)
+              throw StringError("Could not parse OT: " + sgfOT);
+          }
+          else if(sgfOT.find(" fischer") != std::string::npos) {
+            tcIsFischer = true;
+            mainTimeSeconds = Global::stringToDouble(sgfTM);
+            vector<string> pieces = Global::split(sgfOT,' ');
+            periodTimeSeconds = Global::stringToDouble(pieces[0]);
+            if(!std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000)
+              throw StringError("Could not parse OT: " + sgfOT);
+          }
+          else if(sgfOT.find(" simple") != std::string::npos) {
+            tcIsSimple = true;
+            mainTimeSeconds = Global::stringToDouble(sgfTM);
+            vector<string> pieces = Global::split(sgfOT,' ');
+            periodTimeSeconds = Global::stringToDouble(pieces[0]);
+            if(!std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000)
+              throw StringError("Could not parse OT: " + sgfOT);
+          }
+          else if(sgfOT.find(" canadian") != std::string::npos || sgfOT.find(" Canadian") != std::string::npos) {
+            tcIsCanadian = true;
+            mainTimeSeconds = Global::stringToDouble(sgfTM);
+            vector<string> pieces = Global::split(Global::split(sgfOT,' ')[0],'/');
+            if(pieces.size() != 2)
+              throw StringError("Could not parse OT: " + sgfOT);
+            canadianMoves = Global::stringToInt(pieces[0]);
+            periodTimeSeconds = Global::stringToDouble(pieces[1]);
+            if(canadianMoves <= 0 || canadianMoves > 1000 || !std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000)
+              throw StringError("Could not parse OT: " + sgfOT);
+            // Switch it to permove time to make it more comparable
+            periodTimeSeconds = periodTimeSeconds / canadianMoves;
+          }
+          if(!std::isfinite(mainTimeSeconds) || mainTimeSeconds < 0 || mainTimeSeconds > 1000000000)
+            throw StringError("Could not parse TM: " + sgfTM);
+        }
+        else if(sgfTM != "") {
+          tcIsAbsolute = true;
+          mainTimeSeconds = Global::stringToDouble(sgfTM);
+          if(!std::isfinite(mainTimeSeconds) || mainTimeSeconds <= 0 || mainTimeSeconds > 1000000000)
+            throw StringError("Could not parse TM: " + sgfTM);
+        }
+        else if(sgfOT != "") {
+          throw StringError("Unexpected OGS/KGS time control with OT only: " + sgfOT + " in " + fileName);
+        }
+        else {
+          tcIsNone = true;
+        }
+      }
+      else if(whatDataSource == "fox") {
+        if(sgfTM != "" && sgfTC != "" && sgfTT != "") {
           tcIsByoYomi = true;
           mainTimeSeconds = Global::stringToDouble(sgfTM);
-          vector<string> pieces = Global::split(Global::split(sgfOT,' ')[0],'x');
-          if(pieces.size() != 2)
-            throw StringError("Could not parse OT: " + sgfOT);
-          byoYomiPeriods = Global::stringToInt(pieces[0]);
-          periodTimeSeconds = Global::stringToDouble(pieces[1]);
-          if(byoYomiPeriods <= 0 || byoYomiPeriods > 1000 || !std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000) {
-            logger.write("Could not parse OT: " + sgfOT);
-            reportSgfDone(false,"BadTimeControl");
-            return;
-          }
+          byoYomiPeriods = Global::stringToInt(sgfTC);
+          periodTimeSeconds = Global::stringToDouble(sgfTT);
+          if(byoYomiPeriods <= 0 || byoYomiPeriods > 1000 || !std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000)
+            throw StringError("Could not parse time control: " + sgfTM + " " + sgfTC + " " + sgfTT);
         }
-        else if(sgfOT.find(" fischer") != std::string::npos) {
-          tcIsFischer = true;
+        else if(sgfTM != "") {
+          tcIsAbsolute = true;
           mainTimeSeconds = Global::stringToDouble(sgfTM);
-          vector<string> pieces = Global::split(sgfOT,' ');
-          periodTimeSeconds = Global::stringToDouble(pieces[0]);
-          if(!std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000) {
-            logger.write("Could not parse OT: " + sgfOT);
-            reportSgfDone(false,"BadTimeControl");
-            return;
-          }
+          if(!std::isfinite(mainTimeSeconds) || mainTimeSeconds <= 0 || mainTimeSeconds > 1000000000)
+            throw StringError("Could not parse TM: " + sgfTM);
         }
-        else if(sgfOT.find(" simple") != std::string::npos) {
-          tcIsSimple = true;
-          mainTimeSeconds = Global::stringToDouble(sgfTM);
-          vector<string> pieces = Global::split(sgfOT,' ');
-          periodTimeSeconds = Global::stringToDouble(pieces[0]);
-          if(!std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000) {
-            logger.write("Could not parse OT: " + sgfOT);
-            reportSgfDone(false,"BadTimeControl");
-            return;
-          }
+        else {
+          throw StringError("Unexpected Fox time control: " + sgfTimeControl + " in " + fileName);
         }
-        else if(sgfOT.find(" canadian") != std::string::npos || sgfOT.find(" Canadian") != std::string::npos) {
-          tcIsCanadian = true;
-          mainTimeSeconds = Global::stringToDouble(sgfTM);
-          vector<string> pieces = Global::split(Global::split(sgfOT,' ')[0],'/');
-          if(pieces.size() != 2)
-            throw StringError("Could not parse OT: " + sgfOT);
-          canadianMoves = Global::stringToInt(pieces[0]);
-          periodTimeSeconds = Global::stringToDouble(pieces[1]);
-          if(canadianMoves <= 0 || canadianMoves > 1000 || !std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000) {
-            logger.write("Could not parse OT: " + sgfOT);
-            reportSgfDone(false,"BadTimeControl");
-            return;
-          }
-          // Switch it to permove time to make it more comparable
-          periodTimeSeconds = periodTimeSeconds / canadianMoves;
-        }
-        if(!std::isfinite(mainTimeSeconds) || mainTimeSeconds < 0 || mainTimeSeconds > 1000000000)
-          throw StringError("Could not parse TM: " + sgfTM);
-      }
-      else if(sgfTM != "") {
-        tcIsAbsolute = true;
-        mainTimeSeconds = Global::stringToDouble(sgfTM);
-        if(!std::isfinite(mainTimeSeconds) || mainTimeSeconds <= 0 || mainTimeSeconds > 1000000000)
-          throw StringError("Could not parse TM: " + sgfTM);
-      }
-      else if(sgfOT != "") {
-        throw StringError("Unexpected OGS/KGS time control with OT only: " + sgfOT + " in " + fileName);
       }
       else {
-        tcIsNone = true;
-      }
-
-      if(whatDataSource == "ogs") {
-        gameDate = SimpleDate(sgfDate);
-        sgfSource = SGFMetadata::SOURCE_OGS;
-      }
-      else if(whatDataSource == "kgs") {
-        gameDate = SimpleDate(sgfDate);
-        sgfSource = SGFMetadata::SOURCE_KGS;
-      }
-      else {
-        ASSERT_UNREACHABLE;
+        // GoGoD and Go4Go do not provide time controls.
+        tcIsUnknown = true;
       }
     }
-    else if(whatDataSource == "fox") {
-      assumeMultipleStartingBlackMovesAreHandicap = false;
-      if(sgfHandicapParsed >= 0)
-        overrideNumHandicapStones = sgfHandicapParsed;
+    catch(const StringError& e) {
+      logger.write("Failed to get time control for sgf: " + fileName + " " + e.what());
+      reportSgfDone(false,"BadTimeControl");
+      return;
+    }
 
-      if(sgfTM != "" && sgfTC != "" && sgfTT != "") {
-        tcIsByoYomi = true;
-        mainTimeSeconds = Global::stringToDouble(sgfTM);
-        byoYomiPeriods = Global::stringToInt(sgfTC);
-        periodTimeSeconds = Global::stringToDouble(sgfTT);
-        if(byoYomiPeriods <= 0 || byoYomiPeriods > 1000 || !std::isfinite(periodTimeSeconds) || periodTimeSeconds <= 0 || periodTimeSeconds > 100000000) {
-          logger.write("Could not parse time control: " + sgfTM + " " + sgfTC + " " + sgfTT);
-          reportSgfDone(false,"BadTimeControl");
-          return;
-        }
-      }
-      else if(sgfTM != "") {
-        tcIsAbsolute = true;
-        mainTimeSeconds = Global::stringToDouble(sgfTM);
-        if(!std::isfinite(mainTimeSeconds) || mainTimeSeconds <= 0 || mainTimeSeconds > 1000000000)
-          throw StringError("Could not parse TM: " + sgfTM);
-      }
-      else {
-        throw StringError("Unexpected Fox time control: " + sgfTimeControl + " in " + fileName);
-      }
-
-      gameDate = SimpleDate(sgfDate);
+    int sgfSource;
+    string sgfDateToParse = sgfDate;
+    if(whatDataSource == "ogs")
+      sgfSource = SGFMetadata::SOURCE_OGS;
+    else if(whatDataSource == "kgs")
+      sgfSource = SGFMetadata::SOURCE_KGS;
+    else if(whatDataSource == "fox")
       sgfSource = SGFMetadata::SOURCE_FOX;
-    }
     else if(whatDataSource == "gogod") {
-      assumeMultipleStartingBlackMovesAreHandicap = false;
-      if(sgfHandicapParsed >= 0)
-        overrideNumHandicapStones = sgfHandicapParsed;
-
-      //gogod doesn't seem to have TC
-      tcIsUnknown = true;
-
       // Handle unusual date annotations
-      string sgfDateToParse;
       size_t startIdx = sgfDate.find_first_of("0123456789");
       if(startIdx != string::npos
          && sgfDate.size() >= startIdx+4
@@ -1840,26 +1813,21 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       else if(Global::isSuffix(sgfDateToParse,"-00"))
         sgfDateToParse = Global::chopSuffix(sgfDateToParse,"-00") + "-01";
 
-      try {
-        gameDate = SimpleDate(sgfDateToParse);
-      }
-      catch(const StringError& e) {
-        logger.write("Failed to get date for sgf: " + fileName + " " + e.what());
-        reportSgfDone(false,"GameBadDate");
-        return;
-      }
       sgfSource = SGFMetadata::SOURCE_GOGOD;
     }
-    else if(whatDataSource == "go4go") {
-      assumeMultipleStartingBlackMovesAreHandicap = false;
-      if(sgfHandicapParsed >= 0)
-        overrideNumHandicapStones = sgfHandicapParsed;
-      tcIsUnknown = true;
-      gameDate = SimpleDate(sgfDate);
+    else if(whatDataSource == "go4go")
       sgfSource = SGFMetadata::SOURCE_GO4GO;
-    }
-    else {
+    else
       throw StringError("Unknown data source: " + whatDataSource);
+
+    SimpleDate gameDate;
+    try {
+      gameDate = SimpleDate(sgfDateToParse);
+    }
+    catch(const StringError& e) {
+      logger.write("Failed to get date for sgf: " + fileName + " " + e.what());
+      reportSgfDone(false,"GameBadDate");
+      return;
     }
 
     // Error check
