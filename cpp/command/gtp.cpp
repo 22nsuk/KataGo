@@ -49,6 +49,7 @@ static const vector<string> knownCommands = {
   //Get or change a few limited params dynamically
   "kata-get-models",
   "kata-get-param",
+  "kata-get-param-state",
   "kata-get-params",
   "kata-set-param",
   "kata-set-params",
@@ -2694,6 +2695,26 @@ int MainCmds::gtp(const vector<string>& args) {
             response = params[pieces[0]].dump();
           }
         }
+      }
+    }
+    else if(command == "kata-get-param-state") {
+      if(pieces.size() != 1) {
+        responseIsError = true;
+        response = "Expected one argument for kata-get-param-state but got '" + Global::concat(pieces," ") + "'";
+      }
+      else if(pieces[0] != "analysisWideRootNoise" && pieces[0] != "playoutDoublingAdvantage") {
+        responseIsError = true;
+        response = "Unsupported parameter for kata-get-param-state: " + pieces[0];
+      }
+      else {
+        const string& key = pieces[0];
+        nlohmann::json state;
+        state["value"] = key == "analysisWideRootNoise" ?
+          engine->getAnalysisParams().wideRootNoise : engine->getGenmoveParams().playoutDoublingAdvantage;
+        // Preserve the ordinary config key, separately from the effective value. In particular,
+        // an absent PDA key enables dynamic play even when its effective numeric value is zero.
+        state["configuredValue"] = cfg.contains(key) ? nlohmann::json(cfg.getString(key)) : nlohmann::json(nullptr);
+        response = state.dump();
       }
     }
     else if(command == "kata-get-models") {

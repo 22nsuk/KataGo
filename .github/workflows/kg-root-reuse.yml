@@ -56,7 +56,7 @@ jobs:
         run: python3 python/test_training_data_metadata.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/training-metadata-proof"
       - name: Check GTP move filtering for both colors and analysis formats
         run: python3 python/test_gtp_analysis_filter.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/analysis-filter-proof"
-      - name: Check GTP parameter command discovery and JSON updates
+      - name: Check GTP parameter discovery, updates, and exact state restoration
         run: python3 python/test_gtp_parameter_commands.py --engine "$RUNNER_TEMP/kg-build/katago" --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz --output "$RUNNER_TEMP/parameter-commands-proof"
       - name: Check both colors, threads, ownership, and root visit caps
         run: |
