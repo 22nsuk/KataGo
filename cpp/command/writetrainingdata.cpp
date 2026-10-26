@@ -1653,7 +1653,7 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       else if(s == "w+") {
         sgfGameEnded = true;
         sgfGameEndedButRecordIncomplete = true;
-        sgfGameWinner = P_BLACK;
+        sgfGameWinner = P_WHITE;
       }
       else {
         logger.write("Game ended with unknown result " + fileName + " result " + sgfResult);

@@ -1,4 +1,4 @@
-# SGF 학습 데이터 변환의 worker 설정
+# SGF 학습 데이터 변환
 
 `katago writetrainingdata`는 SGF 파일을 병렬 처리하며, worker마다 `Search`와 학습 데이터
 출력 버퍼를 갖습니다. 변환에 사용하는 config에 다음 설정을 추가할 수 있습니다.
@@ -54,3 +54,19 @@ Eigen CPU 빌드로 실제 변환을 실행합니다. 기본값, 1·2 workers, �
 설정 상한, 파일 제한, 빈 입력, 제한 0 및 잘못된 설정을 검사합니다. NN 서버 스레드 로그와
 실제로 생성된 worker 수, 처리 건수, NPZ 행 수 및 임시 파일 정리를 확인합니다.
 입력이 없는 두 사례는 존재하지 않는 모델 경로로 실행해 NN 로딩을 생략하는지 검증합니다.
+
+승패 목표 회귀검사는 다음 명령으로 실행합니다.
+
+```sh
+python3 python/test_training_data_results.py --engine build-eigen/katago \
+  --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz \
+  --output training-results-proof
+```
+
+`RE[B+]`와 `RE[W+]`는 점수를 생략한 흑승·백승입니다. Fox·OGS 기보, 소문자·공백 정규화,
+기존 수순 누락 표기를 포함한 8개 사례에서 실제 NPZ의 240개 행을 읽고, 각 수의 착수자
+관점에서 승패 목표와 학습 가중치를 검증합니다. 기존 Fox 검사의 행 수·빈 Q 목표 검사도
+함께 적용합니다.
+
+이전 버전은 `RE[W+]`를 흑승으로 처리했습니다. 해당 기보를 포함해 생성한 학습 데이터는
+수정된 엔진으로 다시 변환해야 합니다. 이미 저장된 NPZ를 자동으로 수정하지는 않습니다.

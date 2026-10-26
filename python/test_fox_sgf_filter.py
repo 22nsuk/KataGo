@@ -25,7 +25,7 @@ MOVE_COUNT = 30
 
 
 def sgf(handicap: str | None, komi: str, rules: str, *, app: bool = True,
-        placements: str = "") -> str:
+        placements: str = "", result: str = "?") -> str:
     # Two separated groups grow down opposite sides; no passes or captures.
     points = [(column, row) for column in range(2) for row in range(9)][:15]
     moves = "".join(
@@ -35,7 +35,7 @@ def sgf(handicap: str | None, komi: str, rules: str, *, app: bool = True,
     return (
         "(;GM[1]FF[4]SZ[9]PB[filter-test-black]PW[filter-test-white]"
         # GC is required by the OGS positive control and ignored by Fox.
-        "BR[1d]WR[1d]DT[2024-01-01]TM[600]GC[ranked]RE[?]"
+        f"BR[1d]WR[1d]DT[2024-01-01]TM[600]GC[ranked]RE[{result}]"
         + ("AP[foxwq]" if app else "")
         + (f"HA[{handicap}]" if handicap is not None else "")
         + f"KM[{komi}]RU[{rules}]" + placements + moves + ")\n"
