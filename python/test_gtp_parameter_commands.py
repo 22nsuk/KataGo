@@ -27,7 +27,57 @@ def rejected(probe, command):
         raise AssertionError(f'Expected a GTP error: {command}')
 
 
-def check_restoration(engine, model, output):
+def check_numeric_boundaries(probe):
+    pda = 'playoutDoublingAdvantage'
+    wrn = 'analysisWideRootNoise'
+    original = {key: snapshot(probe, key) for key in (pda, wrn)}
+    cases = (
+        ('lower-bounds', '0', '-3'),
+        ('upper-bounds', '5', '3'),
+        ('negative-zero', '-0.0', '-0.0'),
+        ('round-trip-precision', '1.2345678901234567', '-1.2345678901234567'),
+        ('small-exponent', '1e-100', '-1e-100'),
+    )
+    results = []
+    for name, noise, advantage in cases:
+        values = {wrn: noise, pda: advantage}
+        probe.command('kata-set-params ' + json.dumps(values))
+        captured = {key: snapshot(probe, key) for key in values}
+        # Ordinary equality would miss a negative zero becoming positive zero.
+        for key, value in values.items():
+            assert captured[key]['configuredValue'] == value, (name, key, captured)
+            assert float(captured[key]['value']).hex() == float(value).hex(), (name, key, captured)
+
+        probe.command('kata-set-params ' + json.dumps({wrn: '2', pda: '1'}))
+        probe.command('kata-set-params ' + json.dumps(
+            {key: state['configuredValue'] for key, state in captured.items()}))
+        restored = {key: snapshot(probe, key) for key in values}
+        for key, value in values.items():
+            assert restored[key]['configuredValue'] == value, (name, key, restored)
+            assert float(restored[key]['value']).hex() == float(value).hex(), (name, key, restored)
+        results.append({'case': name, 'restoredState': restored})
+
+    # The immediately adjacent doubles beyond each inclusive limit must be rejected.
+    rejected_bounds = (
+        (wrn, math.nextafter(0.0, -math.inf)),
+        (wrn, math.nextafter(5.0, math.inf)),
+        (pda, math.nextafter(-3.0, -math.inf)),
+        (pda, math.nextafter(3.0, math.inf)),
+    )
+    unchanged = {key: snapshot(probe, key) for key in (pda, wrn)}
+    for key, value in rejected_bounds:
+        other = pda if key == wrn else wrn
+        rejected(probe, 'kata-set-params ' + json.dumps({key: repr(value), other: '0.5'}))
+        assert {key: snapshot(probe, key) for key in (pda, wrn)} == unchanged
+    probe.command('kata-set-params ' + json.dumps(
+        {key: state['configuredValue'] if state['configuredValue'] is not None else ''
+         for key, state in original.items()}))
+    assert {key: snapshot(probe, key) for key in (pda, wrn)} == original
+    return {'roundTrips': results, 'rejectedBounds': len(rejected_bounds)}
+
+
+def check_restoration(engine, model, output, player):
+    output.mkdir()
     # Both presence bits matter. Indexed keys are intentionally unused by the GTP loader.
     cases = (
         ('automatic', None, None, None),
@@ -58,7 +108,7 @@ def check_restoration(engine, model, output):
         config.write_text(settings, encoding='utf-8')
         with ((case / 'gtp.log').open('x', encoding='utf-8') as transcript,
               (case / 'stderr.log').open('x', encoding='utf-8') as stderr):
-            probe = Probe(engine, model, config, 'W', False, transcript=transcript, stderr_log=stderr)
+            probe = Probe(engine, model, config, player, False, transcript=transcript, stderr_log=stderr)
             try:
                 original = {key: snapshot(probe, key) for key in (pda, wrn)}
                 assert original[pda] == {
@@ -68,7 +118,9 @@ def check_restoration(engine, model, output):
                 probe.command('boardsize 9')
                 probe.command('komi 0')
                 probe.command('fixed_handicap 4')
-                probe.command('genmove W')
+                probe.command(f'genmove {player}')
+                # Per-move dynamic PDA must not replace the stored search parameter.
+                assert {key: snapshot(probe, key) for key in (pda, wrn)} == original
 
                 updates = {pda: '-1.23456789012345', wrn: '2.34567890123456'}
                 probe.command('kata-set-params ' + json.dumps(updates))
@@ -93,7 +145,7 @@ def check_restoration(engine, model, output):
                 assert {key: snapshot(probe, key) for key in (pda, wrn)} == original
                 probe.command('clear_board')
                 probe.command('fixed_handicap 4')
-                probe.command('genmove W')
+                probe.command(f'genmove {player}')
             finally:
                 clean_exit = probe.close()
             assert clean_exit, (name, probe.process.returncode)
@@ -105,10 +157,12 @@ def check_restoration(engine, model, output):
                   for line in chats]
         assert actual[0] == actual[1], (name, actual)
         if configured is None or cap is not None:
-            assert actual[0] > 0, ('Dynamic PDA was disabled', name, actual)
+            # White is disadvantaged by the fixture's four Black handicap stones.
+            signed = actual[0] if player == 'W' else -actual[0]
+            assert signed > 0, ('Dynamic PDA was disabled or reversed', player, name, actual)
         else:
             assert actual[0] == round(float(configured), 2), (name, actual)
-    return [case[0] for case in cases]
+    return {'player': player, 'cases': [case[0] for case in cases]}
 
 
 def run(engine: Path, model: Path, output: Path):
@@ -145,14 +199,16 @@ def run(engine: Path, model: Path, output: Path):
                 assert json.loads(probe.command(f'kata-get-param {key}')) == value
             assert probe.command('kata-set-param maxVisits 21').strip() == ''
             assert json.loads(probe.command('kata-get-params'))['maxVisits'] == 21
+            numeric_boundaries = check_numeric_boundaries(probe)
         finally:
             clean_exit = probe.close()
         assert clean_exit, f'KataGo did not exit cleanly: {probe.process.returncode}'
-    restoration_cases = check_restoration(engine, model, output)
+    restoration_cases = [check_restoration(engine, model, output / player, player) for player in ('B', 'W')]
     # Record success only after the protocol checks, shutdown, and log writes succeed.
     (output / 'result.json').write_text(json.dumps(
         {'status': 'PASS', 'version': version, **identity, 'knownCommands': known,
-         'updatedParameters': updates, 'restorationCases': restoration_cases}, indent=2) + '\n', encoding='utf-8')
+         'updatedParameters': updates, 'restorationCases': restoration_cases,
+         'numericBoundaries': numeric_boundaries}, indent=2) + '\n', encoding='utf-8')
 
 
 if __name__ == '__main__':
@@ -162,4 +218,5 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     run(args.engine, args.model, args.output)
-    print('GTP parameter commands: PASS (discovery, JSON updates, exact state and PDA mode restoration)')
+    print('GTP parameter commands: PASS (discovery, JSON updates, 12 color/mode restorations, '
+          '5 numeric round trips and 4 rejected boundaries)')
