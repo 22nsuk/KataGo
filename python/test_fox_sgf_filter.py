@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import sys
 import zipfile
 
 
@@ -70,6 +71,25 @@ def npz_rows(path: Path) -> int:
         return rows
 
 
+def check_zero_komi_correction(directory: Path) -> None:
+    signs = {False: 0, True: 0}
+    for path in directory.glob("*.npz"):
+        with zipfile.ZipFile(path) as archive, archive.open("globalInputNC") as data:
+            header = npy_header(data)
+            rows, channels = header["shape"]
+            assert channels == 19 and header["descr"] == "<f4" and not header["fortran_order"], header
+            payload = data.read()
+            assert len(payload) == rows * channels * 4, (path, len(payload), header)
+            for row in struct.iter_unpack("<19f", payload):
+                # V7 input 5 is current-player komi / 20. Territory scoring adds
+                # one point after each Black move, then removes it after White.
+                self_komi = row[5] * 20
+                expected = 7.5 if self_komi > 0 else -6.5
+                assert abs(self_komi - expected) < 1e-6, (path, self_komi, expected)
+                signs[self_komi > 0] += 1
+    assert signs == {False: MOVE_COUNT // 2, True: MOVE_COUNT // 2}, signs
+
+
 def done_counts(log: str) -> dict[str, int]:
     counts = {}
     reading = False
@@ -119,8 +139,13 @@ def run_case(engine: Path, model: Path, root: Path, name: str, source: str,
     if max_files is not None:
         command += ["-max-files-to-load", str(max_files)]
     (directory / "command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
-    with (directory / "process.log").open("w", encoding="utf-8") as stream:
-        subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=120)
+    process_log = directory / "process.log"
+    try:
+        with process_log.open("w", encoding="utf-8") as stream:
+            subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=120)
+    except subprocess.CalledProcessError:
+        print(process_log.read_text(encoding="utf-8", errors="replace"), file=sys.stderr)
+        raise
     log = (output / "log.log").read_text(encoding="utf-8")
     counts = done_counts(log)
     totals = re.findall(r"\bTotal rows: ([0-9]+)", log)
@@ -146,7 +171,9 @@ def main() -> None:
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True, help="New evidence directory; must not exist")
-    parser.add_argument("--case", choices=("rejected", "accepted", "mixed", "non-fox"), action="append")
+    parser.add_argument("--case", choices=("rejected", "accepted", "mixed", "non-fox",
+                                         "rule-spellings", "normalized-zero-komi",
+                                         "normalized-handicap", "unsupported-rules"), action="append")
     args = parser.parse_args()
     engine, model, root = args.engine.resolve(strict=True), args.model.resolve(strict=True), args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -163,7 +190,28 @@ def main() -> None:
     # Preserve the separate handicap exclusion policy (including missing HA).
     skipped = [sgf("2", "0", "Chinese", placements="AB[cc][gg]"),
                sgf("2", "0", "Chinese"), sgf(None, "7.5", "Chinese")]
+    rule_spellings = [sgf(handicap, komi, rules) for rules, handicap, komi in (
+        ("chinese", "0", "375"), (" \tCHINESE \t ", "0", "750"),
+        (" ChInEsE ", "1", "0"), (" japanese ", "1", "0"),
+        ("JAPANESE", "0", "6.5"), (" jApAnEsE ", "0", "7.5"),
+    )] + [sgf("0", "325", " japanese ", app=False),
+          sgf("0", "750", " chinese ", app=False)]
+    normalized_handicap = [sgf("1", komi, rules) for rules, komi in (
+        (" japanese ", "325"), (" CHINESE ", "700"),
+        ("jApAnEsE", "275"), ("chinese", "375"),
+    )]
+    unsupported_rules = [sgf("0", komi, rules) for rules, komi in (
+        ("Chinese", "700"), (" chinese ", "700"),
+        ("Japanese", "275"), (" JAPANESE ", "275"),
+        ("Korean", "6.5"), ("AGA", "7.5"),
+    )]
     cases = [
+        ("rule-spellings", "fox", rule_spellings, {"Used": len(rule_spellings)},
+         MOVE_COUNT * len(rule_spellings)),
+        ("normalized-zero-komi", "fox", [sgf("0", "0", " \tJaPaNeSe \t ")], {"Used": 1}, MOVE_COUNT),
+        ("normalized-handicap", "fox", normalized_handicap,
+         {"GameHandicap1MismatchKomi": len(normalized_handicap)}, 0),
+        ("unsupported-rules", "fox", unsupported_rules, {"GameBadRules": len(unsupported_rules)}, 0),
         ("rejected", "fox", rejected, {"GameHandicap1MismatchKomi": len(rejected)}, 0),
         ("accepted", "fox", accepted, {"Used": len(accepted)}, MOVE_COUNT * len(accepted)),
         ("mixed", "fox", rejected + accepted + skipped,
@@ -172,8 +220,13 @@ def main() -> None:
         ("non-fox", "ogs", [sgf("1", "6.5", "Japanese", app=False),
                               sgf("1", "7.5", "Chinese", app=False)], {"Used": 2}, 2 * MOVE_COUNT),
     ]
-    results = [run_case(engine, model, root, *case) for case in cases
-               if args.case is None or case[0] in args.case]
+    results = []
+    for case in cases:
+        if args.case is not None and case[0] not in args.case:
+            continue
+        results.append(run_case(engine, model, root, *case))
+        if case[0] == "normalized-zero-komi":
+            check_zero_komi_correction(root / case[0] / "data")
     (root / "result.json").write_text(
         json.dumps({"status": "PASS", "cases": results}, indent=2) + "\n", encoding="utf-8"
     )
