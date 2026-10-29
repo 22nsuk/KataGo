@@ -701,6 +701,106 @@ static void runRootReuseEvalCacheTests(const string& modelFile, Logger& logger) 
   delete nnEval;
 }
 
+static void runEvalCachePDAContextTests(const string& modelFile) {
+  Logger logger(nullptr,false,false,false);
+  NNEvaluator* nnEval = startNNEval(modelFile,logger,"pda-cache-context",9,9,0,true,false,false,true,false);
+  for(Player pla: {P_BLACK,P_WHITE}) {
+    for(double pda: {0.0,3.0,-3.0}) {
+      for(Player fixedPla: {C_EMPTY,pla,getOpp(pla)}) {
+        SearchParams params;
+        params.maxPlayouts = 128;
+        params.numThreads = 1;
+        params.useGraphSearch = true;
+        params.useEvalCache = true;
+        params.evalCacheMinVisits = 4;
+        params.rootSymmetryPruning = false;
+        params.useNoisePruning = false;
+        params.useUncertainty = false;
+        params.valueWeightExponent = 0.0;
+        params.playoutDoublingAdvantage = pda;
+        params.playoutDoublingAdvantagePla = fixedPla;
+        Board board(9,9);
+        BoardHistory hist(board,getOpp(pla),Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+        hist.makeBoardMoveAssumeLegal(board,Location::ofString("D4",board),getOpp(pla),NULL);
+        const Loc move = Location::ofString("F6",board);
+        vector<int> mask(Board::MAX_ARR_SIZE,1);
+        mask[move] = 0;
+        auto restrictRoot = [&](Search& search, Player rootPla, const vector<int>& active) {
+          search.setAvoidMoveUntilByLoc(rootPla == P_BLACK ? active : vector<int>(),
+                                       rootPla == P_WHITE ? active : vector<int>());
+        };
+        Search producer(params,nnEval,&logger,"pda-cache-producer");
+        producer.setPosition(pla,board,hist);
+        restrictRoot(producer,pla,mask);
+        producer.runWholeSearch(pla);
+        const SearchNode* produced = producer.getChildForMove(producer.rootNode,move);
+        testAssert(produced != nullptr);
+        const Hash128 key = produced->graphHash ^ producer.evalCacheParamsHash;
+        auto entry = producer.evalCache->find(key);
+        auto rootEntry = producer.evalCache->find(producer.rootGraphHash ^ producer.evalCacheParamsHash);
+        testAssert(entry != nullptr && entry->cacheWeight > 0);
+        testAssert(rootEntry != nullptr && rootEntry->firstExploreEvals.count(move) == 1);
+
+        for(bool pondering: {false,true}) {
+          for(bool shared: {false,true}) {
+            Search consumer(params,nnEval,&logger,"pda-cache-consumer");
+            if(shared)
+              consumer.setExternalEvalCache(producer.evalCache);
+            consumer.setPosition(pla,board,hist);
+            restrictRoot(consumer,pla,mask);
+            std::function<bool()> stop = [&]() { return consumer.getRootVisits() >= 2; };
+            consumer.runWholeSearch(pla,pondering,&stop);
+            const SearchNode* child = consumer.getChildForMove(consumer.rootNode,move);
+            testAssert(child != nullptr && child->stats.visits.load() == 1);
+            bool compatible = pda == 0 || fixedPla != C_EMPTY || !pondering;
+            testAssert((consumer.evalCacheParamsHash == producer.evalCacheParamsHash) == compatible);
+            // Cover both aggregate consumption below root and first-explore hints at root.
+            testAssert(child->evalCacheEntry == (shared && compatible ? entry : nullptr));
+            testAssert(consumer.rootNode->evalCacheEntry == (shared && compatible ? rootEntry : nullptr));
+            double raw = child->getNNOutput()->whiteWinProb - child->getNNOutput()->whiteLossProb;
+            double used = child->stats.winLossValueAvg.load();
+            if(!shared || !compatible)
+              testAssert(abs(used - raw) < 1e-6);
+            else
+              testAssert(abs(used - entry->avgWinLoss) <= abs(raw - entry->avgWinLoss) + 1e-6);
+            testAssert(producer.evalCache->find(key) == entry);
+          }
+        }
+
+        // The same Search must also reject the old context after a normal move.
+        auto replies = produced->getChildren();
+        Loc reply = Board::NULL_LOC;
+        std::shared_ptr<EvalCacheEntry> replyEntry;
+        for(int i = 0; i<replies.getCapacity() && replies[i].getIfAllocated() != nullptr; i++) {
+          const SearchNode* grandchild = replies[i].getIfAllocated();
+          auto candidate = producer.evalCache->find(grandchild->graphHash ^ producer.evalCacheParamsHash);
+          if(candidate != nullptr && candidate->cacheWeight > 0) {
+            reply = replies[i].getMoveLoc();
+            replyEntry = candidate;
+            break;
+          }
+        }
+        testAssert(reply != Board::NULL_LOC);
+        testAssert(producer.makeMove(move,pla));
+        vector<int> replyMask(Board::MAX_ARR_SIZE,1);
+        replyMask[reply] = 0;
+        restrictRoot(producer,getOpp(pla),replyMask);
+        std::function<bool()> stop = [&]() { return producer.getRootVisits() >= 2; };
+        producer.runWholeSearch(getOpp(pla),&stop);
+        const SearchNode* child = producer.getChildForMove(producer.rootNode,reply);
+        testAssert(child != nullptr && child->stats.visits.load() == 1);
+        bool compatible = pda == 0 || fixedPla != C_EMPTY;
+        testAssert(child->evalCacheEntry == (compatible ? replyEntry : nullptr));
+        if(!compatible) {
+          double raw = child->getNNOutput()->whiteWinProb - child->getNNOutput()->whiteLossProb;
+          testAssert(abs(child->stats.winLossValueAvg.load() - raw) < 1e-6);
+        }
+      }
+    }
+  }
+  delete nnEval;
+}
+
 void Tests::runNNLessSearchTests() {
   cout << "Running neuralnetless search tests" << endl;
   NeuralNet::globalInitialize();
@@ -716,6 +816,7 @@ void Tests::runNNLessSearchTests() {
   runRootReuseInvariantTests(modelFile,logger);
   runRootReuseFutilePruningTests(modelFile,logger);
   runRootReuseEvalCacheTests(modelFile,logger);
+  runEvalCachePDAContextTests(modelFile);
 
   {
     cout << "===================================================================" << endl;
