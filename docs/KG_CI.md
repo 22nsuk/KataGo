@@ -150,6 +150,19 @@ python3 python/test_gtp_parameter_commands.py --engine build-eigen/katago \
   --output parameter-commands-proof
 ```
 
+학습 데이터 메타데이터 회귀는 정상 흑승 기보, 불량 기보, 정상 백승 기보를 순서대로
+처리하고, 불량 기보를 건너뛴 뒤 두 정상 기보의 60개 행이 각각 한 번씩 NPZ에 보존되는지
+확인합니다. OGS/KGS의 알 수 없거나 잘못된 `OT`, 출처별 단일 값 속성의 복수 값,
+잘못된 시간·날짜를 검사하며, 정상 형식과 해당 출처에서 사용하지 않는 속성도 함께
+확인합니다. 단일 worker의 지연 flush, 복수 worker의 혼합 입력, 전부 불량인 입력을
+검사하고 모델 초기화 오류는 계속 전체 변환 실패로 처리되는지 확인합니다.
+
+```sh
+python3 python/test_training_data_metadata.py --engine build-eigen/katago \
+  --model cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz \
+  --output training-metadata-proof
+```
+
 속도 평가는 같은 소스와 같은 도구체인의 cold/warm 실행을 비교합니다. ccache 통계,
 configure/build/test 시간, cache restore/save 시간과 크기를 분리해 읽어야 합니다.
 히트가 있어도 링크·테스트·SDK 압축 해제는 계속 실행되므로 전체 시간이 같은 비율로
