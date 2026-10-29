@@ -1080,6 +1080,7 @@ add_executable(katago
   tests/testbook.cpp
   tests/testcommon.cpp
   tests/testconfig.cpp
+  tests/testevalcache.cpp
   tests/testmisc.cpp
   tests/testnnevalcanary.cpp
   tests/testbackendreference.cpp

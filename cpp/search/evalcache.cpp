@@ -49,13 +49,9 @@ std::shared_ptr<EvalCacheEntry> EvalCacheTable::find(Hash128 graphHash) {
 void EvalCacheTable::update(Hash128 graphHash, const SearchNode* node, int64_t evalCacheMinVisits, bool isRootNode, bool canRecordAggregate) {
   uint32_t subMapIdx = (uint32_t)(graphHash.hash0 % entries.size());
   std::mutex& mutex = mutexPool->getMutex(subMapIdx);
-
-  std::shared_ptr<EvalCacheEntry> oldEntry;
-
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    oldEntry = entries[subMapIdx][graphHash];
-  }
+  // Apply the replacement policy and merge hints against the entry that we replace.
+  std::lock_guard<std::mutex> lock(mutex);
+  std::shared_ptr<EvalCacheEntry> oldEntry = entries[subMapIdx][graphHash];
 
   float newCacheWeight = (float)(node->stats.visits.load(std::memory_order_acquire));
   if(oldEntry != nullptr && newCacheWeight < oldEntry->cacheWeight * 0.75f)
@@ -131,7 +127,6 @@ void EvalCacheTable::update(Hash128 graphHash, const SearchNode* node, int64_t e
   }
 
   // Replace the old entry with the new one
-  std::lock_guard<std::mutex> lock(mutex);
   entries[subMapIdx][graphHash] = newEntry;
 }
 
