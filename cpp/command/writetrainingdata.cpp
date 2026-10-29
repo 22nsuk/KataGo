@@ -1004,6 +1004,13 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
     string sgfEvent;
     string sgfDate;
     string sgfPlace;
+    string sgfGC;
+    string sgfTM;
+    string sgfOT;
+    string sgfLC;
+    string sgfLT;
+    string sgfTC;
+    string sgfTT;
     try {
       sgfBUsername = Global::trim(sgfRaw->getRootPropertyWithDefault("PB", ""));
       sgfWUsername = Global::trim(sgfRaw->getRootPropertyWithDefault("PW", ""));
@@ -1016,6 +1023,20 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       sgfEvent = sgfRaw->getRootPropertyWithDefault("EV", "");
       sgfDate = sgfRaw->getRootPropertyWithDefault("DT", "");
       sgfPlace = sgfRaw->getRootPropertyWithDefault("PC", "");
+      if(whatDataSource == "ogs")
+        sgfGC = sgfRaw->getRootPropertyWithDefault("GC", "");
+      if(whatDataSource == "ogs" || whatDataSource == "kgs" || whatDataSource == "fox") {
+        sgfTM = sgfRaw->getRootPropertyWithDefault("TM", "");
+        sgfOT = sgfRaw->getRootPropertyWithDefault("OT", "");
+      }
+      if(whatDataSource == "ogs" || whatDataSource == "kgs") {
+        sgfLC = sgfRaw->getRootPropertyWithDefault("LC", "");
+        sgfLT = sgfRaw->getRootPropertyWithDefault("LT", "");
+      }
+      if(whatDataSource == "fox") {
+        sgfTC = sgfRaw->getRootPropertyWithDefault("TC", "");
+        sgfTT = sgfRaw->getRootPropertyWithDefault("TT", "");
+      }
     }
     catch(const StringError& e) {
       logger.write("Invalid SGF " + fileName + ": " + e.what());
@@ -1028,7 +1049,6 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
     bool foundKgsEntry = false;
     KGSCsvLine kgsEntry;
     if(whatDataSource == "ogs") {
-      string sgfGC = sgfRaw->getRootPropertyWithDefault("GC", "");
       std::vector<string> pieces = Global::split(sgfGC,',');
       bool isRated = false;
       bool isUnrated = false;
@@ -1087,12 +1107,6 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
       throw StringError("Unknown what-data-source " + whatDataSource);
     }
 
-    string sgfTM = sgfRaw->getRootPropertyWithDefault("TM", "");
-    string sgfOT = sgfRaw->getRootPropertyWithDefault("OT", "");
-    string sgfLC = sgfRaw->getRootPropertyWithDefault("LC", "");
-    string sgfLT = sgfRaw->getRootPropertyWithDefault("LT", "");
-    string sgfTC = sgfRaw->getRootPropertyWithDefault("TC", "");
-    string sgfTT = sgfRaw->getRootPropertyWithDefault("TT", "");
     string sgfTimeControl;
     if(whatDataSource == "ogs" || whatDataSource == "kgs") {
       if(sgfTM != "" && sgfOT != "")
@@ -1718,6 +1732,9 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
               throw StringError("Could not parse OT: " + sgfOT);
             // Switch it to permove time to make it more comparable
             periodTimeSeconds = periodTimeSeconds / canadianMoves;
+          }
+          else {
+            throw StringError("Could not parse OT: " + sgfOT);
           }
           if(!std::isfinite(mainTimeSeconds) || mainTimeSeconds < 0 || mainTimeSeconds > 1000000000)
             throw StringError("Could not parse TM: " + sgfTM);
