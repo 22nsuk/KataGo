@@ -14,7 +14,8 @@ from test_fox_sgf_filter import MOVE_COUNT, npy_header, run_case, sgf
 
 def record(source: str, result: str = 'B+', **properties: str | tuple[str, ...]) -> str:
     text = sgf('0', '6.5', 'Japanese', app=source == 'fox', result=result)
-    defaults = {'DT': '2024-01-01', 'TM': '600', 'GC': 'ranked'}
+    defaults = {'DT': '2024-01-01', 'TM': '600', 'GC': 'ranked',
+                'HA': '0', 'KM': '6.5', 'RU': 'Japanese'}
     for key, value in properties.items():
         values = (value,) if isinstance(value, str) else value
         property_text = key + ''.join(f'[{item}]' for item in values)
@@ -80,6 +81,12 @@ def run(engine: Path, model: Path, root: Path):
             cases.append((f'{source}-{name}', source, {'OT': ot}, 'BadTimeControl'))
         cases.append((f'{source}-ot-only', source, {'TM': '', 'OT': '5x30 byo-yomi'}, 'BadTimeControl'))
 
+    fox_rule_cases = {
+        'fox-rules-komi': {'RU': 'Chinese', 'KM': '700'},
+        'fox-rules-alias': {'RU': 'Korean'},
+    }
+    cases.extend((name, 'fox', properties, 'GameBadRules') for name, properties in fox_rule_cases.items())
+
     results = []
     for name, source, properties, reason in cases:
         observed = run_case(
@@ -90,6 +97,11 @@ def run(engine: Path, model: Path, root: Path):
         check_preserved_games(root / name / 'data')
         log = (root / name / 'data' / 'log.log').read_text(encoding='utf-8')
         assert '01.sgf' in log and 'All done' in log, (name, log)
+        if name in fox_rule_cases:
+            fragments = (f"RU[{properties['RU']}]", f"KM[{properties.get('KM', '6.5')}]",
+                         'parsedKomi[', 'HA[0]')
+            assert any('01.sgf' in line and all(fragment in line for fragment in fragments)
+                       for line in log.splitlines()), (name, log)
         # Fewer than 128 rows: all surviving rows are flushed only after the batch.
         assert observed['npz_files'] == 1, observed
         results.append(observed)
@@ -121,8 +133,10 @@ def run(engine: Path, model: Path, root: Path):
                             {'BadTimeControl': 1, 'GameBadDate': 1}, 0, workers=2))
     results.append(run_case(
         engine, model, root, 'parallel-mixed', 'fox',
-        [record('fox', 'B+'), *invalid, record('fox', 'W+')],
-        {'Used': 2, 'BadTimeControl': 1, 'GameBadDate': 1}, 2 * MOVE_COUNT, workers=2, max_rows=128))
+        [record('fox', 'B+'), *invalid,
+         *(record('fox', **properties) for properties in fox_rule_cases.values()), record('fox', 'W+')],
+        {'Used': 2, 'BadTimeControl': 1, 'GameBadDate': 1, 'GameBadRules': len(fox_rule_cases)},
+        2 * MOVE_COUNT, workers=2, max_rows=128))
     check_preserved_games(root / 'parallel-mixed' / 'data')
 
     # Both newly isolated error paths must also finish when all inputs are bad,
