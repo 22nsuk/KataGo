@@ -91,7 +91,7 @@ void Search::addCurrentNNOutputAsLeafValue(SearchNode& node, bool assumeNoExisti
   double lead = (double)nnOutput->whiteLead;
 
   //Note that root node does not use eval cache for its aggregate values
-  if(searchParams.useEvalCache && searchParams.useGraphSearch && node.evalCacheEntry != nullptr && mirroringPla == C_EMPTY && (&node != rootNode) && !node.forceNonTerminal) {
+  if(useEvalCacheForSearch && node.evalCacheEntry != nullptr && (&node != rootNode) && !node.forceNonTerminal) {
     // For raw NN value for purposes of cache weighting, always treat the node as 1 visit since
     // repeating the same nn eval over and over is only 1 visit of eval info.
     int64_t thisNodeVisitsForCache = 1;
@@ -351,7 +351,7 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int numV
   double oldUtilityAvg = utilityAvg;
   utilityAvg += getPatternBonus(node.patternBonusHash,getOpp(node.nextPla));
   //Note that root node does not use eval cache for its aggregate values
-  if(searchParams.useEvalCache && searchParams.useGraphSearch && node.evalCacheEntry != nullptr && mirroringPla == C_EMPTY && (&node != rootNode) && !node.forceNonTerminal) {
+  if(useEvalCacheForSearch && node.evalCacheEntry != nullptr && (&node != rootNode) && !node.forceNonTerminal) {
     adjustEvalsFromCacheHelper(
       node.evalCacheEntry,
       thisNodeVisits,

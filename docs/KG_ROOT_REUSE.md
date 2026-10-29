@@ -67,18 +67,30 @@ this extension. A first restricted search with no existing tree keeps normal sym
 pruning enabled. This distinction does not change visit-cap restart or search limits.
 
 A change involving a depth greater than one clears the tree, including the change
-back to a first-ply or empty restriction. Requests without `reuseRootTree true`
-keep the usual clearing behavior when restriction arrays change. Normal invalidations
+back to a first-ply or empty restriction. Playing a legal move clears both masks
+and also discards the tree if either mask contains a depth other than zero or one.
+Child promotion remains available under ordinary and first-ply restrictions.
+Requests without `reuseRootTree true` keep the usual clearing behavior when
+restriction arrays change. Normal invalidations
 such as a position/player change, different search settings that require clearing,
 komi/rule changes, and `clear_cache` still apply. Each request specifies the complete
 desired restriction; omitted restrictions clear that player's previous mask.
 
-With `useGraphSearch` and `useEvalCache` enabled, a root with a current-player
-restriction does not write its aggregate evaluation into the shared position cache.
+For ordinary and first-ply searches with `useGraphSearch` and `useEvalCache`
+enabled, a root with a current-player restriction does not write its aggregate
+evaluation into the shared position cache.
 An earlier unrestricted aggregate remains available to later searches. Child and
 descendant evaluations remain cacheable under first-ply restrictions. Clearing the
 active mask restores ordinary root aggregate recording; first-ply restrictions on
 the other player and all-zero active masks do not suppress it.
+
+If either restriction array contains a depth other than zero or one, the entire search
+bypasses shared evaluation-cache reads and writes, including aggregate values and
+first-explore hints. This conservative numeric policy checks both complete arrays,
+including entries that happen not to affect a legal move. Existing shared entries
+are retained for compatible searches; ordinary and first-ply requests resume normal
+cache use. The configured `useEvalCache` value, graph search, and neural-network
+caching are unchanged. This cache policy applies to both GTP and JSON analysis.
 
 Cached evaluations also distinguish the resolved player for nonzero automatic
 `playoutDoublingAdvantage`, including normal-search and ponder transitions. A
@@ -153,6 +165,9 @@ graph search with eval cache, preserved snapshots, in-progress cap intervals, an
 legacy/deeper invalidation. Cache regressions also consume a restricted position's
 shared entry below another root, check preservation of unrestricted aggregates and
 valid child records, and restore aggregate recording after clearing the mask.
+Deep-restriction regressions check cache read/write isolation, preservation of prior
+shared entries, and resumption after clearing masks or playing a move. Ordinary and
+first-ply searches continue to exercise compatible cache reuse and child promotion.
 GTP checks exercise empty-list and inactive-color requests
 as well as komi, rule, and player invalidation of a warmed tree.
 Symmetry regressions cover pass-only and inactive-color restrictions, excluding a
