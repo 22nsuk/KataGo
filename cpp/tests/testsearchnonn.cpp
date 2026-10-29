@@ -824,6 +824,165 @@ static void runRootReuseEvalCacheTests(const string& modelFile, Logger& logger) 
   delete nnEval;
 }
 
+static void runDeepRestrictionEvalCacheTests(const string& modelFile) {
+  Logger logger(nullptr,false,false,false);
+  NNEvaluator* nnEval = startNNEval(modelFile,logger,"deep-restriction-cache",9,9,0,true,false,false,true,false);
+  SearchParams params;
+  params.maxPlayouts = 64;
+  params.numThreads = 1;
+  params.useGraphSearch = true;
+  params.useEvalCache = true;
+  params.evalCacheMinVisits = 8;
+  params.rootSymmetryPruning = false;
+  params.useNoisePruning = false;
+  params.useUncertainty = false;
+  params.valueWeightExponent = 0.0;
+  auto setMasks = [](Search& search, Player pla, const vector<int>& active, const vector<int>& other) {
+    search.setAvoidMoveUntilByLoc(pla == P_BLACK ? active : other,
+                                 pla == P_WHITE ? active : other,true);
+  };
+  for(Player pla: {P_BLACK,P_WHITE}) {
+    Board board(9,9);
+    BoardHistory hist(board,getOpp(pla),Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+    const Loc occupiedMove = Location::ofString("D4",board);
+    const Loc rootMove = Location::ofString("F6",board);
+    const Loc replyMove = Location::ofString("C3",board);
+    hist.makeBoardMoveAssumeLegal(board,occupiedMove,getOpp(pla),NULL);
+    vector<int> rootOnlyMask(Board::MAX_ARR_SIZE,1);
+    rootOnlyMask[rootMove] = 0;
+    struct RestrictionCase { int activeDepth; int otherDepth; Loc move; };
+    const RestrictionCase cases[] = {
+      {1,2,replyMove}, {3,0,replyMove}, {4,4,Location::ofString("E5",board)}, {1,1,replyMove}
+    };
+    for(const RestrictionCase& restriction: cases) {
+      const bool deep = restriction.activeDepth > 1 || restriction.otherDepth > 1;
+      vector<int> active = rootOnlyMask;
+      active[restriction.move] = restriction.activeDepth;
+      vector<int> other(Board::MAX_ARR_SIZE,0);
+      other[restriction.move] = restriction.otherDepth;
+      for(bool hasPrior: {true,false}) {
+        Search producer(params,nnEval,&logger,"deep-cache-producer");
+        producer.setPosition(pla,board,hist);
+        setMasks(producer,pla,rootOnlyMask,{});
+        producer.runWholeSearch(pla);
+        const SearchNode* produced = producer.getChildForMove(producer.rootNode,rootMove);
+        testAssert(produced != nullptr);
+        const Hash128 rootKey = producer.rootGraphHash ^ producer.evalCacheParamsHash;
+        const Hash128 childKey = produced->graphHash ^ producer.evalCacheParamsHash;
+        // Also seed an unrestricted aggregate without changing the searched child.
+        producer.setAvoidMoveUntilByLoc({}, {}, true);
+        std::function<bool()> stopNow = []() noexcept { return true; };
+        producer.runWholeSearch(pla,&stopNow);
+        auto priorRoot = producer.evalCache->find(rootKey);
+        auto priorChild = producer.evalCache->find(childKey);
+        testAssert(priorRoot != nullptr && priorRoot->cacheWeight >= params.evalCacheMinVisits);
+        testAssert(priorRoot->firstExploreEvals.count(rootMove) == 1);
+        testAssert(priorChild != nullptr && priorChild->cacheWeight >= params.evalCacheMinVisits);
+        auto cache = hasPrior ? producer.evalCache : std::make_shared<EvalCacheTable>(1);
+        const auto originalEntries = cache->entries;
+
+        Search search(params,nnEval,&logger,"deep-cache-consumer");
+        search.setExternalEvalCache(cache);
+        search.setPosition(pla,board,hist);
+        setMasks(search,pla,active,other);
+        std::function<bool()> stopAfterTwo = [&]() { return search.getRootVisits() >= 2; };
+        search.runWholeSearch(pla,&stopAfterTwo);
+        const SearchNode* child = search.getChildForMove(search.rootNode,rootMove);
+        testAssert(child != nullptr && child->stats.visits.load() == 1);
+        double raw = child->getNNOutput()->whiteWinProb - child->getNNOutput()->whiteLossProb;
+        double used = child->stats.winLossValueAvg.load();
+        if(deep) {
+          if(hasPrior)
+            testAssert(abs(raw - priorChild->avgWinLoss) > 1e-6);
+          // A real first visit must use its NN value, not an unrestricted cached aggregate.
+          testAssert(abs(used - raw) < 1e-6);
+          testAssert(search.rootNode->evalCacheEntry == nullptr && child->evalCacheEntry == nullptr);
+        }
+        else {
+          testAssert(search.rootNode->evalCacheEntry == (hasPrior ? priorRoot : nullptr));
+          testAssert(child->evalCacheEntry == (hasPrior ? priorChild : nullptr));
+          if(hasPrior)
+            testAssert(abs(used - priorChild->avgWinLoss) < abs(raw - priorChild->avgWinLoss));
+          else
+            testAssert(abs(used - raw) < 1e-6);
+        }
+        search.runWholeSearch(pla);
+        child = search.getChildForMove(search.rootNode,rootMove);
+        testAssert(child != nullptr && child->stats.visits.load() >= params.evalCacheMinVisits);
+        if(deep) {
+          // No aggregate, first-explore hint, or unrelated shared entry may be replaced or added.
+          testAssert(cache->entries == originalEntries);
+          search.setAvoidMoveUntilByLoc({}, {}, true);
+          testAssert(search.getRootVisits() == 0);
+          search.beginSearch(false);
+          testAssert(search.rootNode->evalCacheEntry == (hasPrior ? priorRoot : nullptr));
+          setMasks(search,pla,rootOnlyMask,{});
+          search.runWholeSearch(pla,&stopAfterTwo);
+          child = search.getChildForMove(search.rootNode,rootMove);
+          testAssert(child != nullptr && child->evalCacheEntry == (hasPrior ? priorChild : nullptr));
+          testAssert(cache->entries == originalEntries);
+          // Build the restricted tree again to exercise the separate makeMove reset boundary.
+          setMasks(search,pla,active,other);
+          search.runWholeSearch(pla);
+          child = search.getChildForMove(search.rootNode,rootMove);
+          testAssert(child != nullptr && child->stats.visits.load() >= params.evalCacheMinVisits);
+          testAssert(cache->entries == originalEntries);
+        }
+        else {
+          auto rootEntry = cache->find(rootKey);
+          testAssert(rootEntry != nullptr && rootEntry->firstExploreEvals.count(rootMove) == 1);
+          auto childEntry = cache->find(childKey);
+          testAssert(childEntry != nullptr && childEntry->cacheWeight >= params.evalCacheMinVisits);
+        }
+
+        const int64_t childVisits = child->stats.visits.load();
+        const int64_t rootVisits = search.getRootVisits();
+        testAssert(!search.makeMove(occupiedMove,pla));
+        testAssert(search.getRootVisits() == rootVisits);
+        testAssert(search.makeMove(rootMove,pla));
+        testAssert(search.getRootVisits() == (deep ? 0 : childVisits));
+        if(deep)
+          testAssert(cache->entries == originalEntries);
+
+        vector<int> replyMask(Board::MAX_ARR_SIZE,1);
+        replyMask[replyMove] = 0;
+        setMasks(search,getOpp(pla),replyMask,{});
+        search.runWholeSearch(getOpp(pla));
+        auto restoredRoot = cache->find(search.rootGraphHash ^ search.evalCacheParamsHash);
+        testAssert(restoredRoot != nullptr && restoredRoot->firstExploreEvals.count(replyMove) == 1);
+        const SearchNode* reply = search.getChildForMove(search.rootNode,replyMove);
+        testAssert(reply != nullptr);
+        auto restoredChild = cache->find(reply->graphHash ^ search.evalCacheParamsHash);
+        testAssert(restoredChild != nullptr && restoredChild->cacheWeight >= params.evalCacheMinVisits);
+      }
+    }
+    Search privateCacheSearch(params,nnEval,&logger,"deep-private-cache");
+    privateCacheSearch.setPosition(pla,board,hist);
+    vector<int> deepOther(Board::MAX_ARR_SIZE,0);
+    deepOther[replyMove] = 2;
+    setMasks(privateCacheSearch,pla,rootOnlyMask,deepOther);
+    privateCacheSearch.runWholeSearch(pla);
+    testAssert(privateCacheSearch.evalCache == nullptr);
+    privateCacheSearch.setAvoidMoveUntilByLoc({}, {}, true);
+    testAssert(privateCacheSearch.getRootVisits() == 0);
+    setMasks(privateCacheSearch,pla,rootOnlyMask,{});
+    privateCacheSearch.runWholeSearch(pla);
+    testAssert(privateCacheSearch.evalCache != nullptr);
+    auto rootEntry = privateCacheSearch.evalCache->find(privateCacheSearch.rootGraphHash ^ privateCacheSearch.evalCacheParamsHash);
+    testAssert(rootEntry != nullptr && rootEntry->firstExploreEvals.count(rootMove) == 1);
+    const SearchNode* child = privateCacheSearch.getChildForMove(privateCacheSearch.rootNode,rootMove);
+    testAssert(child != nullptr);
+    auto childEntry = privateCacheSearch.evalCache->find(child->graphHash ^ privateCacheSearch.evalCacheParamsHash);
+    testAssert(childEntry != nullptr && childEntry->cacheWeight >= params.evalCacheMinVisits);
+    privateCacheSearch.clearSearch();
+    std::function<bool()> stopAfterTwo = [&]() { return privateCacheSearch.getRootVisits() >= 2; };
+    privateCacheSearch.runWholeSearch(pla,&stopAfterTwo);
+    child = privateCacheSearch.getChildForMove(privateCacheSearch.rootNode,rootMove);
+    testAssert(child != nullptr && child->evalCacheEntry == childEntry);
+  }
+  delete nnEval;
+}
+
 static void runEvalCachePDAContextTests(const string& modelFile) {
   Logger logger(nullptr,false,false,false);
   NNEvaluator* nnEval = startNNEval(modelFile,logger,"pda-cache-context",9,9,0,true,false,false,true,false);
@@ -940,6 +1099,7 @@ void Tests::runNNLessSearchTests() {
   runRootReuseInvariantTests(modelFile,logger);
   runRootReuseFutilePruningTests(modelFile,logger);
   runRootReuseEvalCacheTests(modelFile,logger);
+  runDeepRestrictionEvalCacheTests(modelFile);
   runEvalCachePDAContextTests(modelFile);
 
   {

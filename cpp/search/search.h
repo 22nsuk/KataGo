@@ -93,6 +93,9 @@ struct Search {
   //across different params (the eval cache persists across param changes and, in the analysis engine, is
   //shared across threads that may be running with different params). Recomputed at the start of each search.
   Hash128 evalCacheParamsHash;
+  //Per-search eligibility for all eval cache reads and writes. Deeper move restrictions
+  //change descendant values and first-explore hints, so their searches bypass the shared cache.
+  bool useEvalCacheForSearch;
   Loc rootHintLoc;
 
   //External user-specified moves that are illegal or that should be nontrivially searched, and the number of turns for which they should

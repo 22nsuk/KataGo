@@ -74,6 +74,7 @@ Search::Search(const SearchParams& params, NNEvaluator* nnEval, NNEvaluator* hum
    rootBoard(),
    rootHistory(),
    rootGraphHash(),
+   useEvalCacheForSearch(false),
    rootHintLoc(Board::NULL_LOC),
    avoidMoveUntilByLocBlack(),avoidMoveUntilByLocWhite(),rootRestrictionReuseActive(false),rootSymmetryPruningDisabledForReuse(false),rootVisitCapStartVisits(0),avoidMoveUntilRescaleRoot(false),
    rootFocus(nullptr),rootFocusCleanupMutex(),rootFocusToCleanUp(),
@@ -262,15 +263,19 @@ void Search::setKomiIfNew(float newKomi) {
   applyHistoryModesToRootHistory();
 }
 
-void Search::setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec, bool reuseRootTree) {
-  if(avoidMoveUntilByLocBlack == bVec && avoidMoveUntilByLocWhite == wVec)
-    return;
+static bool hasOnlyRootMoveRestrictions(const std::vector<int>& bVec, const std::vector<int>& wVec) {
   auto rootOnly = [](const std::vector<int>& depths) {
     return std::all_of(depths.begin(), depths.end(), [](int depth) { return depth >= 0 && depth <= 1; });
   };
+  return rootOnly(bVec) && rootOnly(wVec);
+}
+
+void Search::setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec, bool reuseRootTree) {
+  if(avoidMoveUntilByLocBlack == bVec && avoidMoveUntilByLocWhite == wVec)
+    return;
   // Deeper restrictions change the game searched below a child. Those values cannot be reused.
-  if(!reuseRootTree || !rootOnly(bVec) || !rootOnly(wVec) ||
-     !rootOnly(avoidMoveUntilByLocBlack) || !rootOnly(avoidMoveUntilByLocWhite))
+  if(!reuseRootTree || !hasOnlyRootMoveRestrictions(bVec,wVec) ||
+     !hasOnlyRootMoveRestrictions(avoidMoveUntilByLocBlack,avoidMoveUntilByLocWhite))
     clearSearch();
   else if(rootNode != NULL) {
     const auto& oldRootMask = rootPla == P_BLACK ? avoidMoveUntilByLocBlack : avoidMoveUntilByLocWhite;
@@ -467,6 +472,11 @@ bool Search::makeMove(Loc moveLoc, Player movePla, bool preventEncore) {
 
   if(movePla != rootPla)
     setPlayerAndClearHistory(movePla);
+
+  //A move clears the masks below. A subtree searched with deeper restrictions
+  //cannot become an unrestricted root or later populate the shared eval cache.
+  if(!hasOnlyRootMoveRestrictions(avoidMoveUntilByLocBlack,avoidMoveUntilByLocWhite))
+    clearSearch();
 
   //If the white handicap bonus changes due to the move, we will also need to recompute everything since this is
   //basically like a change to the komi.
@@ -755,7 +765,7 @@ void Search::runWholeSearch(
     }
   }
 
-  if(searchParams.useEvalCache && searchParams.useGraphSearch && evalCache != nullptr && rootNode != NULL && mirroringPla == C_EMPTY) {
+  if(useEvalCacheForSearch && evalCache != nullptr && rootNode != NULL) {
     recursivelyRecordEvalCache(*rootNode);
   }
 
@@ -820,12 +830,17 @@ void Search::beginSearch(bool pondering) {
   clearOldNNOutputs();
   computeRootValues();
 
+  //The cache key has no root-relative restriction depth. Bypass both directions
+  //for these requests, while leaving shared entries available to ordinary searches.
+  useEvalCacheForSearch = searchParams.useEvalCache && searchParams.useGraphSearch && mirroringPla == C_EMPTY &&
+    hasOnlyRootMoveRestrictions(avoidMoveUntilByLocBlack,avoidMoveUntilByLocWhite);
+
   //Prepare value bias table if we need it
   if(searchParams.subtreeValueBiasFactor != 0 && subtreeValueBiasTable == NULL && !(searchParams.antiMirror && mirroringPla != C_EMPTY))
     subtreeValueBiasTable = new SubtreeValueBiasTable(searchParams.subtreeValueBiasTableNumShards);
 
   //Prepare eval cache if we need it
-  if(searchParams.useEvalCache && searchParams.useGraphSearch && evalCache == nullptr && mirroringPla == C_EMPTY) {
+  if(useEvalCacheForSearch && evalCache == nullptr) {
     evalCache = std::make_shared<EvalCacheTable>(searchParams.subtreeValueBiasTableNumShards);
   }
 
@@ -909,7 +924,7 @@ void Search::beginSearch(bool pondering) {
     //Also force that it is non-terminal.
     const bool forceNonTerminal = rootHistory.isGameFinished; // Make sure the root isn't considered terminal if game would be finished.
     rootNode = new SearchNode(rootPla, forceNonTerminal, createMutexIdxForNode(dummyThread), rootGraphHash);
-    if(searchParams.useEvalCache && searchParams.useGraphSearch && evalCache != nullptr && mirroringPla == C_EMPTY)
+    if(useEvalCacheForSearch && evalCache != nullptr)
       rootNode->evalCacheEntry = evalCache->find(getEvalCacheKey(rootNode->graphHash));
   }
   else {
@@ -1078,7 +1093,7 @@ SearchNode* Search::allocateOrFindNode(SearchThread& thread, Player nextPla, Loc
         }
       }
 
-      if(searchParams.useEvalCache && searchParams.useGraphSearch && evalCache != nullptr && mirroringPla == C_EMPTY)
+      if(useEvalCacheForSearch && evalCache != nullptr)
         child->evalCacheEntry = evalCache->find(getEvalCacheKey(child->graphHash));
 
       if(patternBonusTable != NULL)
