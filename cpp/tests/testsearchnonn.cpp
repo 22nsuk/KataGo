@@ -491,6 +491,129 @@ static void runRootReuseInvariantTests(const string& modelFile, Logger& logger) 
 }
 
 
+static void runRootReuseTimeCreditTests(const string& modelFile) {
+  Logger logger(nullptr,false,false,false);
+  NNEvaluator* nnEval = startNNEval(modelFile,logger,"root-reuse-time",9,9,0,true,false,false,true,false);
+  for(Player pla: {P_BLACK,P_WHITE}) {
+    for(int numThreads: {1,4}) {
+      for(bool graph: {false,true}) {
+        SearchParams params;
+        params.maxPlayouts = 64;
+        params.numThreads = numThreads;
+        params.useGraphSearch = graph;
+        params.useEvalCache = graph;
+        params.rootSymmetryPruning = false;
+        params.visitCapContempt = 16;
+        params.visitCapContemptPla = pla;
+        params.obviousMovesTimeFactor = 1.0;
+        params.midgameTimeFactor = 1.0;
+        params.overallocateTimeFactor = 1.0;
+        Board board(9,9);
+        BoardHistory hist(board,pla,Rules::getTrompTaylorish(),0,BoardHistoryModes(false,false));
+        Loc a = Location::ofString("C3",board);
+        Loc b = Location::ofString("F6",board);
+        Loc c = Location::ofString("G7",board);
+        auto maskFor = [&](const vector<Loc>& allowed) {
+          vector<int> mask(Board::MAX_ARR_SIZE,1);
+          for(Loc loc: allowed)
+            mask[loc] = 0;
+          return mask;
+        };
+        auto setMask = [&](Search& search, const vector<int>& active, const vector<int>& inactive) {
+          search.setAvoidMoveUntilByLoc(pla == P_BLACK ? active : inactive,
+                                       pla == P_WHITE ? active : inactive,true);
+        };
+        Search search(params,nnEval,&logger,"root-reuse-time-credit");
+        search.setPosition(pla,board,hist);
+        for(Loc loc: {a,b,c}) {
+          setMask(search,maskFor({loc}),{});
+          search.runWholeSearch(pla);
+        }
+        const auto oldMask = maskFor({a,b});
+        setMask(search,oldMask,{});
+        // Controlled work proportions: 60 on A, 20 on B, and 900 hidden on C.
+        // The hidden work must neither dilute nor restore the current time credit.
+        auto children = search.rootNode->getChildren();
+        for(int i = 0; i<children.getCapacity() && children[i].getIfAllocated() != nullptr; i++) {
+          Loc loc = children[i].getMoveLoc();
+          testAssert(loc == a || loc == b || loc == c);
+          children[i].setEdgeVisits(loc == a ? 60 : loc == b ? 20 : 900);
+        }
+        SearchNode* root = search.rootNode;
+        int64_t visits = search.getRootVisits();
+        auto checkTransition = [&](const vector<int>& next, double expected) {
+          setMask(search,oldMask,{});
+          search.effectiveSearchTimeCarriedOver = 8.0;
+          setMask(search,next,{});
+          testAssert(abs(search.effectiveSearchTimeCarriedOver - expected) < 1e-12);
+          testAssert(search.rootNode == root && search.getRootVisits() == visits);
+          testAssert(search.getChildForMove(root,a) != nullptr);
+          testAssert(search.getChildForMove(root,b) != nullptr);
+          testAssert(search.getChildForMove(root,c) != nullptr);
+        };
+        checkTransition(oldMask,8.0);
+        checkTransition(maskFor({a}),6.0);
+        checkTransition(maskFor({b,c}),2.0);
+        checkTransition(maskFor({c}),0.0);
+        checkTransition({},8.0);
+        checkTransition(vector<int>(Board::MAX_ARR_SIZE,0),8.0);
+        setMask(search,oldMask,{});
+        search.effectiveSearchTimeCarriedOver = 8.0;
+        setMask(search,oldMask,maskFor({c}));
+        testAssert(search.effectiveSearchTimeCarriedOver == 8.0);
+        setMask(search,maskFor({c}),{});
+        testAssert(search.effectiveSearchTimeCarriedOver == 0.0);
+        setMask(search,{},{});
+        testAssert(search.effectiveSearchTimeCarriedOver == 0.0);
+        search.effectiveSearchTimeCarriedOver = 8.0;
+        setMask(search,vector<int>(Board::MAX_ARR_SIZE,0),{});
+        testAssert(search.effectiveSearchTimeCarriedOver == 8.0);
+
+        // Exercise time-control budgeting using a real retained tree, with deterministic
+        // carried time instead of a wall-clock warmup. New candidates must get fresh time.
+        for(double futile: {0.0,0.1}) {
+          params.futileVisitsThreshold = futile;
+          Search timed(params,nnEval,&logger,"root-reuse-timed-search");
+          timed.setPosition(pla,board,hist);
+          setMask(timed,maskFor({a}),{});
+          timed.runWholeSearch(pla);
+          int64_t before = timed.getRootVisits();
+          timed.effectiveSearchTimeCarriedOver = 1.0;
+          setMask(timed,maskFor({b,c}),{});
+          testAssert(timed.effectiveSearchTimeCarriedOver == 0.0);
+          // A generous wall-clock limit leaves the deterministic playout cap in charge.
+          TimeControls tc = TimeControls::absoluteTime(1000.0);
+          double minTime,recTime,maxTime;
+          tc.getTime(board,hist,params.lagBuffer,minTime,recTime,maxTime);
+          testAssert(recTime > 10.0 && recTime <= maxTime);
+          std::function<void()> begun = [&]() { testAssert(timed.effectiveSearchTimeCarriedOver == 0.0); };
+          timed.runWholeSearch(&begun,nullptr,false,tc,1.0);
+          testAssert(timed.getRootVisits() > before + 2);
+          testAssert(timed.lastSearchNumPlayouts <= params.maxPlayouts + numThreads - 1);
+          testAssert(timed.getChildForMove(timed.rootNode,a) != nullptr);
+          // Lifetime visit limits still stop immediately even after time credit is reset.
+          params.maxVisits = timed.getRootVisits();
+          timed.setParamsNoClearing(params);
+          setMask(timed,maskFor({a}),{});
+          timed.runWholeSearch(pla);
+          testAssert(timed.lastSearchNumPlayouts == 0);
+          params.maxVisits = SearchParams().maxVisits;
+        }
+        params.numThreads = 1;
+        params.maxPlayouts = 1;
+        Search unexpanded(params,nnEval,&logger,"root-reuse-time-unexpanded");
+        unexpanded.setPosition(pla,board,hist);
+        unexpanded.runWholeSearch(pla);
+        testAssert(unexpanded.getRootVisits() == 1);
+        unexpanded.effectiveSearchTimeCarriedOver = 1.0;
+        setMask(unexpanded,maskFor({a}),{});
+        testAssert(unexpanded.effectiveSearchTimeCarriedOver == 0.0);
+      }
+    }
+  }
+  delete nnEval;
+}
+
 static void runRootReuseFutilePruningTests(const string& modelFile, Logger& logger) {
   NNEvaluator* nnEval = startNNEval(modelFile,logger,"root-reuse-futile",9,9,0,true,false,false,true,false);
   Board board(9,9);
@@ -813,6 +936,7 @@ void Tests::runNNLessSearchTests() {
   const bool logTime = false;
   Logger logger(nullptr, logToStdout, logToStderr, logTime);
   logger.addOStream(cout);
+  runRootReuseTimeCreditTests(modelFile);
   runRootReuseInvariantTests(modelFile,logger);
   runRootReuseFutilePruningTests(modelFile,logger);
   runRootReuseEvalCacheTests(modelFile,logger);

@@ -287,6 +287,24 @@ void Search::setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vec
     // First-ply restrictions on the other player and empty/all-zero encodings
     // do not change this root's support. Keep its snapshot and cap interval intact.
     if(rootMaskChanged) {
+      // Only work on choices that remain allowed can count toward the next time budget.
+      // Hidden children keep their tree, but reallowing them must not recreate time credit
+      // that an earlier mask transition discarded.
+      double oldAllowedVisits = 0.0;
+      double retainedAllowedVisits = 0.0;
+      SearchNodeChildrenReference children = rootNode->getChildren();
+      for(int i = 0; i<children.getCapacity(); i++) {
+        if(children[i].getIfAllocated() == NULL)
+          break;
+        Loc loc = children[i].getMoveLoc();
+        if((size_t)loc < oldRootMask.size() && oldRootMask[loc] > 0)
+          continue;
+        double visits = (double)children[i].getEdgeVisits();
+        oldAllowedVisits += visits;
+        if((size_t)loc >= newRootMask.size() || newRootMask[loc] <= 0)
+          retainedAllowedVisits += visits;
+      }
+      effectiveSearchTimeCarriedOver *= oldAllowedVisits > 0 ? retainedAllowedVisits / oldAllowedVisits : 0.0;
       rootRestrictionReuseActive = true;
       // Give the changed support a fresh cap's worth of normal selection before freezing
       // its distribution. Retained children must not immediately freeze out unallocated moves.
