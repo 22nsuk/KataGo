@@ -1228,16 +1228,18 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
         reportSgfDone(false,"GameBadRules");
         return;
       }
+      //Use the rules parser's case and whitespace normalization for Fox's supported rule names.
+      const string normalizedSgfRules = Global::trim(Global::toLower(sgfRules));
       //Ugly hack for fox that seems to have komi 0 when the real komi is 6.5
-      if(sgfRules == "Japanese" && rules.komi == 0.0 && sgfHandicapParsed == 0) {
+      if(normalizedSgfRules == "japanese" && rules.komi == 0.0 && sgfHandicapParsed == 0) {
         rules.komi = 6.5;
       }
       else if(
-        (sgfRules == "Japanese" && rules.komi == 0.0 && sgfHandicapParsed == 1)
-        || (sgfRules == "Japanese" && rules.komi == 6.5 && sgfHandicapParsed == 0)
-        || (sgfRules == "Japanese" && rules.komi == 7.5 && sgfHandicapParsed == 0)
-        || (sgfRules == "Chinese" && rules.komi == 0.0 && sgfHandicapParsed == 1)
-        || (sgfRules == "Chinese" && rules.komi == 7.5 && sgfHandicapParsed == 0)
+        (normalizedSgfRules == "japanese" && rules.komi == 0.0 && sgfHandicapParsed == 1)
+        || (normalizedSgfRules == "japanese" && rules.komi == 6.5 && sgfHandicapParsed == 0)
+        || (normalizedSgfRules == "japanese" && rules.komi == 7.5 && sgfHandicapParsed == 0)
+        || (normalizedSgfRules == "chinese" && rules.komi == 0.0 && sgfHandicapParsed == 1)
+        || (normalizedSgfRules == "chinese" && rules.komi == 7.5 && sgfHandicapParsed == 0)
       ) {
         //Good.
       }
@@ -1247,9 +1249,11 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
         return;
       }
       else {
-        throw StringError(
-          "Unhandled case " + sgfKomi + " " + sgfRules + " " +
-          Global::doubleToString(rules.komi) + " " + Global::intToString(sgfHandicapParsed) + " " + fileName);
+        logger.write(
+          "Unsupported Fox rules/komi/handicap in sgf: " + fileName + " RU[" + sgfRules + "] KM[" + sgfKomi +
+          "] parsedKomi[" + Global::doubleToString(rules.komi) + "] HA[" + Global::intToString(sgfHandicapParsed) + "]");
+        reportSgfDone(false,"GameBadRules");
+        return;
       }
     }
     else if(whatDataSource == "gogod") {
