@@ -82,6 +82,13 @@ the other player and all-zero active masks do not suppress it.
 
 ## Search limits
 
+When the active root mask changes, carried thinking time is scaled by the fraction
+of previously allowed child edge visits that remain allowed. Disjoint choices (or
+no previously allowed child visits) reset that credit to zero. Expanding the mask
+keeps the remaining credit but does not recover time discarded by an earlier mask.
+Hidden children retain their tree and visits. Equivalent masks and changes confined
+to the other player's first-ply restrictions preserve the credit unchanged.
+
 Tree reuse does not change the existing meaning of search limits. `maxVisits` counts
 retained visits, including visits to children currently hidden by the root mask;
 `maxPlayouts` counts only new counted playouts in the current request. The visit-cap
