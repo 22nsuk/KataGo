@@ -824,7 +824,8 @@ static void runRootReuseEvalCacheTests(const string& modelFile, Logger& logger) 
   delete nnEval;
 }
 
-static void runDeepRestrictionEvalCacheTests(const string& modelFile, Logger& logger) {
+static void runDeepRestrictionEvalCacheTests(const string& modelFile) {
+  Logger logger(nullptr,false,false,false);
   NNEvaluator* nnEval = startNNEval(modelFile,logger,"deep-restriction-cache",9,9,0,true,false,false,true,false);
   SearchParams params;
   params.maxPlayouts = 64;
@@ -1098,7 +1099,7 @@ void Tests::runNNLessSearchTests() {
   runRootReuseInvariantTests(modelFile,logger);
   runRootReuseFutilePruningTests(modelFile,logger);
   runRootReuseEvalCacheTests(modelFile,logger);
-  runDeepRestrictionEvalCacheTests(modelFile,logger);
+  runDeepRestrictionEvalCacheTests(modelFile);
   runEvalCachePDAContextTests(modelFile);
 
   {
