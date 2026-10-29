@@ -86,6 +86,7 @@ class ConfigParser {
 private:
   bool initialized;
   std::string fileName;
+  bool hasKeyValueOverrides;
   std::string contents;
   std::map<std::string, std::string> keyValues;
 

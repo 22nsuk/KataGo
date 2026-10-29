@@ -10,7 +10,7 @@
 using namespace std;
 
 ConfigParser::ConfigParser(bool keysOverride, bool keysOverrideFromIncludes_)
-  :initialized(false),fileName(),contents(),keyValues(),
+  :initialized(false),fileName(),hasKeyValueOverrides(false),contents(),keyValues(),
    keysOverrideEnabled(keysOverride),keysOverrideFromIncludes(keysOverrideFromIncludes_),
    curLineNum(0),curFilename(),includedFiles(),baseDirs(),logMessages(),
    usedKeysMutex(),usedKeys()
@@ -44,6 +44,7 @@ ConfigParser::ConfigParser(const ConfigParser& source) {
   std::lock_guard<std::mutex> lock(source.usedKeysMutex);
   initialized = source.initialized;
   fileName = source.fileName;
+  hasKeyValueOverrides = source.hasKeyValueOverrides;
   baseDirs = source.baseDirs;
   contents = source.contents;
   keyValues = source.keyValues;
@@ -58,6 +59,7 @@ void ConfigParser::initialize(const string& fname) {
   ifstream in;
   FileUtils::open(in,fname);
   fileName = fname;
+  hasKeyValueOverrides = false;
   string baseDir = extractBaseDir(fname);
   if(!baseDir.empty())
     baseDirs.push_back(baseDir);
@@ -389,7 +391,10 @@ void ConfigParser::overrideKeys(const map<string, string>& newkvs) {
     else
       keyValues[iter->first] = iter->second;
   }
-  fileName += " and/or command-line and query overrides";
+  if(!hasKeyValueOverrides) {
+    fileName += " and/or command-line and query overrides";
+    hasKeyValueOverrides = true;
+  }
 }
 
 

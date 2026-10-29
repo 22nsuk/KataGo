@@ -23,8 +23,50 @@ def rejected(probe, command):
         probe.command(command)
     except AssertionError as error:
         assert str(error).startswith(command + ': ?'), str(error)
+        # Strip the changing GTP response ID so callers can compare diagnostic text.
+        return re.sub(r'^\?\d* ?', '', str(error)[len(command) + 2:])
     else:
         raise AssertionError(f'Expected a GTP error: {command}')
+
+
+def check_override_diagnostics(probe, config):
+    original = json.loads(probe.command('kata-get-params'))
+    snapshots = {key: snapshot(probe, key)
+                 for key in ('playoutDoublingAdvantage', 'analysisWideRootNoise')}
+    updates = {key: original[key] for key in ('maxVisits', 'maxPlayouts')}
+    # Establish the initial diagnostic after applying a map override. The error below
+    # is checked against the complete config, after the candidate config is copied.
+    probe.command('kata-set-params ' + json.dumps(updates))
+    invalid_single = 'kata-set-param delayMoveScale -1'
+    invalid_batch = 'kata-set-params ' + json.dumps(
+        {key: value + 1 for key, value in updates.items()} | {'delayMoveScale': -1})
+
+    def unchanged():
+        assert json.loads(probe.command('kata-get-params')) == original
+        assert {key: snapshot(probe, key) for key in snapshots} == snapshots
+
+    initial = {command: rejected(probe, command) for command in (invalid_single, invalid_batch)}
+    for error in initial.values():
+        assert str(config) in error, error
+        assert ' and/or command-line and query overrides' in error, error
+    unchanged()
+    for command in (
+            f'kata-set-param maxVisits {updates["maxVisits"]}',
+            'kata-set-params ' + json.dumps(updates)):
+        for _ in range(500):
+            probe.command(command)
+        for invalid, expected in initial.items():
+            actual = rejected(probe, invalid)
+            assert actual == expected, (
+                'Config override diagnostic grew after repeated updates',
+                len(expected.encode('utf-8')), len(actual.encode('utf-8')))
+            # The valid fields in a failed batch must not be committed.
+            unchanged()
+    for error in initial.values():
+        assert error.count(' and/or command-line and query overrides') == 1, error
+    return {'singleUpdates': 500, 'bulkUpdates': 500,
+            'diagnosticBytes': {command.split()[0]: len(error.encode('utf-8'))
+                                for command, error in initial.items()}}
 
 
 def check_numeric_boundaries(probe):
@@ -199,6 +241,7 @@ def run(engine: Path, model: Path, output: Path):
                 assert json.loads(probe.command(f'kata-get-param {key}')) == value
             assert probe.command('kata-set-param maxVisits 21').strip() == ''
             assert json.loads(probe.command('kata-get-params'))['maxVisits'] == 21
+            override_diagnostics = check_override_diagnostics(probe, config)
             numeric_boundaries = check_numeric_boundaries(probe)
         finally:
             clean_exit = probe.close()
@@ -208,6 +251,7 @@ def run(engine: Path, model: Path, output: Path):
     (output / 'result.json').write_text(json.dumps(
         {'status': 'PASS', 'version': version, **identity, 'knownCommands': known,
          'updatedParameters': updates, 'restorationCases': restoration_cases,
+         'overrideDiagnostics': override_diagnostics,
          'numericBoundaries': numeric_boundaries}, indent=2) + '\n', encoding='utf-8')
 
 
@@ -219,4 +263,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
     run(args.engine, args.model, args.output)
     print('GTP parameter commands: PASS (discovery, JSON updates, 12 color/mode restorations, '
-          '5 numeric round trips and 4 rejected boundaries)')
+          '1000 repeated updates with bounded diagnostics, 5 numeric round trips and '
+          '4 rejected boundaries)')
