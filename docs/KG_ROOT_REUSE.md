@@ -80,6 +80,11 @@ descendant evaluations remain cacheable under first-ply restrictions. Clearing t
 active mask restores ordinary root aggregate recording; first-ply restrictions on
 the other player and all-zero active masks do not suppress it.
 
+Cached evaluations also distinguish the resolved player for nonzero automatic
+`playoutDoublingAdvantage`, including normal-search and ponder transitions. A
+different PDA player cannot consume the earlier context's aggregates or first-explore
+hints. Zero PDA and an explicitly fixed PDA player preserve compatible reuse.
+
 ## Search limits
 
 Tree reuse does not change the existing meaning of search limits. `maxVisits` counts
