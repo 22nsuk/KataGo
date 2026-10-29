@@ -14,6 +14,7 @@
 class NNEvaluator;
 
 namespace Tests {
+  void runEvalCacheTests();
   //testboardbasic.cpp
   void runBoardIOTests();
   void runBoardBasicTests();
