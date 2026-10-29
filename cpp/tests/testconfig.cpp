@@ -398,6 +398,50 @@ void Tests::runConfigTests(const vector<string>& args) {
     cout << "Config overriding test OK\n";
   }
 
+  // Repeated runtime overrides, including copied configs, must keep bounded source diagnostics.
+  for(const string& fileName: {dataPath + "test.cfg", dataPath + "provenance and/or command-line and query overrides"}) {
+    const string overrideSource = " and/or command-line and query overrides";
+    ConfigParser cfg(fileName);
+    ConfigParser beforeOverrides(cfg);
+    const string contents = cfg.getContents();
+    testAssert(cfg.getFileName() == fileName);
+    const map<string,string> overrides = {{"maxVisits", "123"}};
+    cfg.overrideKeys(overrides);
+    beforeOverrides.overrideKeys(overrides);
+    ConfigParser initializedAfterOverrides;
+    initializedAfterOverrides.overrideKeys(overrides);
+    initializedAfterOverrides.initialize(fileName);
+    initializedAfterOverrides.overrideKeys(overrides);
+    const string expectedSource = fileName + overrideSource;
+    testAssert(cfg.getFileName() == expectedSource);
+    testAssert(beforeOverrides.getFileName() == expectedSource);
+
+    ConfigParser afterOverrides(cfg);
+    const vector<pair<set<string>,set<string>>> mutexKeySets = {{{"maxVisits"}, {"maxPlayouts"}}};
+    for(int i = 0; i < 1000; i++) {
+      cfg.overrideKeys(overrides);
+      afterOverrides.overrideKeys({{"maxPlayouts", "456"}}, mutexKeySets);
+      afterOverrides.overrideKeys(overrides, mutexKeySets);
+    }
+    for(ConfigParser* overridden: {&cfg, &beforeOverrides, &afterOverrides, &initializedAfterOverrides}) {
+      testAssert(overridden->getFileName() == expectedSource);
+      testAssert(overridden->getContents() == contents);
+      testAssert(overridden->getInt("maxVisits") == 123);
+      // A value loaded through @include is still present after map overrides.
+      testAssert(overridden->contains("reportAnalysisWinratesAs"));
+      bool failed = false;
+      try {
+        overridden->getInt("maxVisits", 0, 100);
+      }
+      catch(const IOError& e) {
+        failed = true;
+        testAssert(string(e.what()) == "Key 'maxVisits' must be in the range 0 to 100 in config file " + expectedSource);
+      }
+      testAssert(failed);
+    }
+    testAssert(!afterOverrides.contains("maxPlayouts"));
+  }
+
   // circular dependency test
   {
     try {
