@@ -890,6 +890,13 @@ void Search::beginSearch(bool pondering) {
   //folded into every eval cache lookup, keeping cached search results from leaking across different params.
   if(searchParams.useEvalCache && searchParams.useGraphSearch) {
     evalCacheParamsHash = searchParams.getHash();
+    // Auto PDA is relative to the player this search is for, including while pondering.
+    // Clearing the tree on a player change does not clear the shared eval cache.
+    if(searchParams.playoutDoublingAdvantage != 0 && searchParams.playoutDoublingAdvantagePla == C_EMPTY) {
+      uint64_t pdaPla = (uint64_t)getPlayoutDoublingAdvantagePla();
+      evalCacheParamsHash ^= Hash128(Hash::murmurMix(pdaPla + 0xD6E8FEB86659FD93ULL),
+                                    Hash::murmurMix(pdaPla + 0xA5A3564E27F8867FULL));
+    }
     //Which player is capped can depend on plaThatSearchIsFor, which the params hash does not cover.
     if(visitCapForBlack != 0 || visitCapForWhite != 0)
       evalCacheParamsHash ^= Hash128(Hash::murmurMix((uint64_t)visitCapForBlack), Hash::murmurMix((uint64_t)visitCapForWhite + 0x9E3779B97F4A7C15ULL));

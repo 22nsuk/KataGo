@@ -12,15 +12,16 @@ import zipfile
 from test_fox_sgf_filter import MOVE_COUNT, npy_header, run_case, sgf
 
 
-def record(source: str, result: str = 'B+', **properties: str) -> str:
+def record(source: str, result: str = 'B+', **properties: str | tuple[str, ...]) -> str:
     text = sgf('0', '6.5', 'Japanese', app=source == 'fox', result=result)
+    defaults = {'DT': '2024-01-01', 'TM': '600', 'GC': 'ranked'}
     for key, value in properties.items():
-        if key == 'DT':
-            text = text.replace('DT[2024-01-01]', f'DT[{value}]')
-        elif key == 'TM':
-            text = text.replace('TM[600]', f'TM[{value}]')
+        values = (value,) if isinstance(value, str) else value
+        property_text = key + ''.join(f'[{item}]' for item in values)
+        if key in defaults:
+            text = text.replace(f'{key}[{defaults[key]}]', property_text)
         else:
-            text = text.replace(';B[', f'{key}[{value}];B[', 1)
+            text = text.replace(';B[', f'{property_text};B[', 1)
     return text
 
 
@@ -53,21 +54,29 @@ def run(engine: Path, model: Path, root: Path):
         cases.extend((
             (f'{source}-tm-text', source, {'TM': 'invalid'}, 'BadTimeControl'),
             (f'{source}-tm-range', source, {'TM': '-1'}, 'BadTimeControl'),
+            (f'{source}-tm-multiple', source, {'TM': ('600', '700')}, 'SGFInvalid'),
+            (f'{source}-ot-multiple', source, {'OT': ('5x30 byo-yomi', '10 fischer')}, 'SGFInvalid'),
             (f'{source}-date-text', source, {'DT': 'not-a-date'}, 'GameBadDate'),
             (f'{source}-date-range', source, {'DT': '2024-02-30'}, 'GameBadDate'),
         ))
     cases.extend((
         ('fox-period-count', 'fox', {'TC': 'invalid', 'TT': '30'}, 'BadTimeControl'),
         ('fox-period-time', 'fox', {'TC': '5', 'TT': 'invalid'}, 'BadTimeControl'),
+        ('fox-tc-multiple', 'fox', {'TC': ('5', '6')}, 'SGFInvalid'),
+        ('fox-tt-multiple', 'fox', {'TT': ('30', '60')}, 'SGFInvalid'),
         ('fox-missing-time', 'fox', {'TM': ''}, 'BadTimeControl'),
+        ('ogs-gc-multiple', 'ogs', {'GC': ('ranked', 'unranked')}, 'SGFInvalid'),
         ('go4go-date-text', 'go4go', {'DT': 'not-a-date'}, 'GameBadDate'),
         ('go4go-date-range', 'go4go', {'DT': '2024-02-30'}, 'GameBadDate'),
         ('gogod-date-range', 'gogod', {'DT': '2024-02-30'}, 'GameBadDate'),
         ('gogod-date-text', 'gogod', {'DT': 'not-a-date'}, 'GameDateParsing'),
     ))
     for source in ('ogs', 'kgs'):
+        for key in ('LC', 'LT'):
+            cases.append((f'{source}-{key.lower()}-multiple', source, {key: ('5', '30')}, 'SGFInvalid'))
         for name, ot in (('byoyomi', '30 byo-yomi'), ('canadian', '25 canadian'),
-                         ('fischer', 'invalid fischer'), ('simple', 'invalid simple')):
+                         ('fischer', 'invalid fischer'), ('simple', 'invalid simple'),
+                         ('unknown', 'invalid'), ('unsupported', '15 progressive')):
             cases.append((f'{source}-{name}', source, {'OT': ot}, 'BadTimeControl'))
         cases.append((f'{source}-ot-only', source, {'TM': '', 'OT': '5x30 byo-yomi'}, 'BadTimeControl'))
 
@@ -85,14 +94,21 @@ def run(engine: Path, model: Path, root: Path):
         assert observed['npz_files'] == 1, observed
         results.append(observed)
 
-    # Valid formats still work, including GoGoD's historical date normalization.
+    # Valid formats and unused source-specific properties still work, including
+    # GoGoD's historical date normalization and comments with multiple values.
+    unused_fox = {'GC': ('ranked', 'unranked'), 'LC': ('5', '6'), 'LT': ('30', '60')}
+    unused_ogs = {'TC': ('5', '6'), 'TT': ('30', '60')}
+    unused_kgs = {'GC': ('ranked', 'unranked'), **unused_ogs}
+    unused_historical = {'TM': ('600', '700'), 'OT': ('invalid', '15 progressive'),
+                         **unused_kgs, 'LC': ('5', '6'), 'LT': ('30', '60')}
     valid = {
-        'fox': [{}, {'TC': '5', 'TT': '30'}],
+        'fox': [{}, {'TC': '5', 'TT': '30'}, {'OT': 'unknown display-only format'}, unused_fox],
         'ogs': [{}, {'TM': ''}, {'OT': '5x30 byo-yomi'}, {'OT': '25/600 Canadian'},
-                {'OT': '10 fischer'}, {'OT': '30 simple'}],
-        'kgs': [{}, {'OT': '5x30 byo-yomi'}, {'OT': '25/600 canadian'}],
-        'go4go': [{}],
-        'gogod': [{}, {'DT': '2024'}, {'DT': '2024-02'}, {'DT': '2024-00-00'}],
+                {'OT': '10 fischer'}, {'OT': '30 simple'}, {'LC': '5', 'LT': '30'}, unused_ogs],
+        'kgs': [{}, {'OT': '5x30 byo-yomi'}, {'OT': '25/600 canadian'},
+                {'OT': '10 fischer'}, {'OT': '30 simple'}, {'LC': '5', 'LT': '30'}, unused_kgs],
+        'go4go': [{}, unused_historical],
+        'gogod': [{}, {'DT': '2024'}, {'DT': '2024-02'}, {'DT': '2024-00-00'}, unused_historical],
     }
     for source, formats in valid.items():
         results.append(run_case(
@@ -108,6 +124,21 @@ def run(engine: Path, model: Path, root: Path):
         [record('fox', 'B+'), *invalid, record('fox', 'W+')],
         {'Used': 2, 'BadTimeControl': 1, 'GameBadDate': 1}, 2 * MOVE_COUNT, workers=2, max_rows=128))
     check_preserved_games(root / 'parallel-mixed' / 'data')
+
+    # Both newly isolated error paths must also finish when all inputs are bad,
+    # and preserve each valid record when workers process a mixed batch.
+    for source in ('ogs', 'kgs'):
+        invalid = [record(source, OT='invalid'), record(source, TM=('600', '700'))]
+        if source == 'ogs':
+            invalid.append(record(source, GC=('ranked', 'unranked')))
+        expected = {'BadTimeControl': 1, 'SGFInvalid': len(invalid) - 1}
+        results.append(run_case(engine, model, root, f'{source}-all-invalid', source,
+                                invalid, expected, 0, workers=2))
+        results.append(run_case(
+            engine, model, root, f'{source}-parallel-mixed', source,
+            [record(source, 'B+'), *invalid, record(source, 'W+')],
+            {'Used': 2, **expected}, 2 * MOVE_COUNT, workers=2, max_rows=128))
+        check_preserved_games(root / f'{source}-parallel-mixed' / 'data')
 
     # Fatal model setup errors must not become successful per-record skips.
     try:
